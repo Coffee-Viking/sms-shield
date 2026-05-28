@@ -42,7 +42,7 @@ class SmsReceiver : BroadcastReceiver() {
             simDisplayName = simFields.displayName,
             simCarrierName = simFields.carrierName
         )
-        val added = InboxStore(context).addMessage(message)
+        val added = InboxStore(context).addReceivedMessage(message)
         if (added) {
             InboxStore.notifyMessagesUpdated(context)
         }

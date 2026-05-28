@@ -18,16 +18,16 @@ GPL-3.0-only
 
 ## Latest Release
 
-https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.37
+https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.38
 
 APK:
 
-https://github.com/Coffee-Viking/sms-shield/releases/download/v1.37/sms-shield_1.37.apk
+https://github.com/Coffee-Viking/sms-shield/releases/download/v1.38/sms-shield_1.38.apk
 
 Version:
 
-- `versionName`: `1.37`
-- `versionCode`: `137`
+- `versionName`: `1.38`
+- `versionCode`: `138`
 
 APK size: about 10 MB.
 

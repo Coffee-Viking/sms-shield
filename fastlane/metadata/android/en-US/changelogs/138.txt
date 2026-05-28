@@ -1,0 +1,3 @@
+Added search support in Archive.
+fixed a bug with message storage.
+Added GPL 3.0 license text to the sidebar footer.

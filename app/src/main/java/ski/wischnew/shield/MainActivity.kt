@@ -271,6 +271,10 @@ private enum class Screen {
     SETTINGS
 }
 
+private fun Screen.supportsSearch(): Boolean {
+    return this == Screen.MAIN || this == Screen.ARCHIVE
+}
+
 private enum class BulkMessageAction {
     ARCHIVE,
     FREEZE,
@@ -571,7 +575,7 @@ private fun SmsShieldApp(
         }
     }
     val openMessageDetail: (SmsMessageRecord) -> Unit = { message ->
-        restoreSearchAfterDetail = screen == Screen.MAIN && searchActive && searchQuery.isNotBlank()
+        restoreSearchAfterDetail = screen.supportsSearch() && searchActive && searchQuery.isNotBlank()
         if (restoreSearchAfterDetail) {
             searchActive = false
         }
@@ -579,7 +583,7 @@ private fun SmsShieldApp(
         selectedMessage = message
     }
     val openConversationDetail: (ConversationThread) -> Unit = { conversation ->
-        restoreSearchAfterDetail = screen == Screen.MAIN && searchActive && searchQuery.isNotBlank()
+        restoreSearchAfterDetail = screen.supportsSearch() && searchActive && searchQuery.isNotBlank()
         if (restoreSearchAfterDetail) {
             searchActive = false
         }
@@ -589,7 +593,7 @@ private fun SmsShieldApp(
     val closeMessageDetail: () -> Unit = {
         selectedMessage = null
         selectedConversationKey = null
-        if (restoreSearchAfterDetail && screen == Screen.MAIN) {
+        if (restoreSearchAfterDetail && screen.supportsSearch()) {
             searchActive = true
         }
         restoreSearchAfterDetail = false
@@ -868,7 +872,7 @@ private fun SmsShieldApp(
                     colors = colors,
                     searchActive = searchActive,
                     searchQuery = searchQuery,
-                    showSearch = screen == Screen.MAIN && selectedMessage == null && selectedConversationKey == null,
+                    showSearch = screen.supportsSearch() && selectedMessage == null && selectedConversationKey == null,
                     onSearchClick = { searchActive = true },
                     onSearchQueryChange = { searchQuery = it },
                     onSearchClose = {
@@ -1042,6 +1046,7 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 accentColor = accentColor,
                                 activeSims = activeSims,
+                                searchQuery = searchQuery,
                                 listState = archiveListState,
                                 onReturnMessagesToInbox = returnMessagesToInbox,
                                 onDeleteMessages = deleteMessages,
@@ -1147,7 +1152,7 @@ private fun SmsShieldApp(
                         messageId = sentMessage.id,
                         subscriptionId = selectedSim?.subscriptionId
                     )
-                    inboxStore.addMessage(sentMessage)
+                    inboxStore.addSentMessage(sentMessage)
                     inboxVersion++
                     composeError = null
                     showComposeDialog = false
@@ -1490,7 +1495,7 @@ private fun DrawerFooter(versionName: String) {
                 .clip(RoundedCornerShape(18.dp))
         )
         Text(
-            text = if (versionName.isBlank()) "SMS Shield" else "SMS Shield $versionName",
+            text = if (versionName.isBlank()) "SMS Shield - GPL 3.0" else "SMS Shield $versionName - GPL 3.0",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold
@@ -1808,6 +1813,7 @@ private fun ArchiveMessagesView(
     colors: UiColors,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    searchQuery: String,
     listState: LazyListState,
     onReturnMessagesToInbox: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
@@ -1826,6 +1832,7 @@ private fun ArchiveMessagesView(
         colors = colors,
         accentColor = accentColor,
         activeSims = activeSims,
+        searchQuery = searchQuery,
         listState = listState,
         showArchiveAgeDividers = true,
         statusForMessage = { messageStatus(it) },
@@ -1847,6 +1854,7 @@ private fun FolderMessageListView(
     colors: UiColors,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    searchQuery: String = "",
     listState: LazyListState,
     showArchiveAgeDividers: Boolean,
     statusForMessage: (SmsMessageRecord) -> String,
@@ -1859,7 +1867,24 @@ private fun FolderMessageListView(
     val contactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var pendingBulkAction by remember { mutableStateOf<BulkMessageAction?>(null) }
-    val visibleIds = remember(messages) { messages.map { it.id }.toSet() }
+    val visibleMessages = remember(messages, searchQuery, contactsGranted, activeSims) {
+        val query = searchQuery.trim()
+        if (query.isBlank()) {
+            messages
+        } else {
+            messages.filter { message ->
+                val sender = ContactLookup.resolveSender(context, message.sender).primary
+                val status = statusForMessage(message)
+                val simLabel = messageSecondaryLine(message, activeSims).orEmpty()
+                message.sender.contains(query, ignoreCase = true) ||
+                    sender.contains(query, ignoreCase = true) ||
+                    message.body.contains(query, ignoreCase = true) ||
+                    status.contains(query, ignoreCase = true) ||
+                    simLabel.contains(query, ignoreCase = true)
+            }
+        }
+    }
+    val visibleIds = remember(visibleMessages) { visibleMessages.map { it.id }.toSet() }
     val allVisibleSelected = visibleIds.isNotEmpty() && selectedIds.containsAll(visibleIds)
     val toggleSelection: (Long) -> Unit = { id ->
         selectedIds = if (id in selectedIds) {
@@ -1880,6 +1905,10 @@ private fun FolderMessageListView(
         EmptyState(emptyTitle, emptyBody, colors)
         return
     }
+    if (visibleMessages.isEmpty()) {
+        EmptyState("No matching messages", "Try another sender, keyword, or status.", colors)
+        return
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -1894,7 +1923,7 @@ private fun FolderMessageListView(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             var lastArchiveBucket = 0
-            messages.forEach { msg ->
+            visibleMessages.forEach { msg ->
                 val archiveBucket = if (showArchiveAgeDividers) archiveAgeBucket(msg.timestamp) else 0
                 if (archiveBucket != 0 && archiveBucket != lastArchiveBucket) {
                     item(key = "archive-divider-$archiveBucket-${msg.id}") {

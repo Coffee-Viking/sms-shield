@@ -1,7 +1,9 @@
 package ski.wischnew.shield.sms
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Telephony
 import ski.wischnew.shield.rules.FilterEngine
 import ski.wischnew.shield.rules.Rule
@@ -49,6 +51,28 @@ class InboxStore(private val context: Context) {
         val existing = listMessages()
         if (existing.any { it.isLikelyDuplicateOf(message) }) return false
         val updated = existing.toMutableList().apply { add(0, message) }.take(500)
+        saveMessages(updated)
+        return true
+    }
+
+    fun addReceivedMessage(message: SmsMessageRecord): Boolean {
+        val existing = listMessages()
+        if (existing.any { it.isLikelyDuplicateOf(message) }) return false
+        val storedMessage = if (message.blocked) {
+            message
+        } else {
+            writeToSystemSmsProvider(message, outgoing = false, adoptProviderId = true)
+        }
+        val updated = existing.toMutableList().apply { add(0, storedMessage) }.take(500)
+        saveMessages(updated)
+        return true
+    }
+
+    fun addSentMessage(message: SmsMessageRecord): Boolean {
+        val existing = listMessages()
+        if (existing.any { it.isLikelyDuplicateOf(message) }) return false
+        val storedMessage = writeToSystemSmsProvider(message, outgoing = true, adoptProviderId = false)
+        val updated = existing.toMutableList().apply { add(0, storedMessage) }.take(500)
         saveMessages(updated)
         return true
     }
@@ -351,6 +375,46 @@ class InboxStore(private val context: Context) {
             arr.put(message.toJson())
         }
         prefs.edit().putString("messages", arr.toString()).apply()
+    }
+
+    private fun writeToSystemSmsProvider(
+        message: SmsMessageRecord,
+        outgoing: Boolean,
+        adoptProviderId: Boolean
+    ): SmsMessageRecord {
+        if (Telephony.Sms.getDefaultSmsPackage(context) != context.packageName) return message
+
+        val inserted = insertSystemSms(message, outgoing, includeSubscription = true)
+            ?: insertSystemSms(message, outgoing, includeSubscription = false)
+            ?: return message
+        val providerId = inserted.lastPathSegment?.toLongOrNull()
+        return if (adoptProviderId && providerId != null) {
+            message.copy(id = providerId)
+        } else {
+            message
+        }
+    }
+
+    private fun insertSystemSms(message: SmsMessageRecord, outgoing: Boolean, includeSubscription: Boolean): Uri? {
+        val address = if (outgoing) message.sender.removePrefix("To: ").trim() else message.sender
+        val values = ContentValues().apply {
+            put(Telephony.Sms.ADDRESS, address)
+            put(Telephony.Sms.BODY, message.body)
+            put(Telephony.Sms.DATE, message.timestamp)
+            put(Telephony.Sms.READ, 1)
+            put(Telephony.Sms.SEEN, 1)
+            put(
+                Telephony.Sms.TYPE,
+                if (outgoing) Telephony.Sms.MESSAGE_TYPE_SENT else Telephony.Sms.MESSAGE_TYPE_INBOX
+            )
+            if (includeSubscription) {
+                message.simSubscriptionId?.let { put(SimRepository.smsSubscriptionColumn(), it) }
+            }
+        }
+        val target = if (outgoing) Telephony.Sms.Sent.CONTENT_URI else Telephony.Sms.Inbox.CONTENT_URI
+        return runCatching {
+            context.contentResolver.insert(target, values)
+        }.getOrNull()
     }
 
     private fun SmsMessageRecord.toJson(): JSONObject {
