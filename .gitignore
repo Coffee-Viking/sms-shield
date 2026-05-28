@@ -1,0 +1,23 @@
+# Build output
+.gradle/
+build/
+app/build/
+
+# Local Android/IDE state
+local.properties
+.idea/
+*.iml
+
+# Signing keys and private release config
+keystore.properties
+*.keystore
+*.jks
+*.p12
+
+# Local release/test artifacts
+release/
+backups/
+mockup/
+
+# Working design/source images that are not needed to build the app
+/images/

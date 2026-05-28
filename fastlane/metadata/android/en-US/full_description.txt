@@ -1,0 +1,13 @@
+SMS Shield is an Android SMS app focused on local, on-device message filtering.
+
+It supports keyword, number, wildcard, and country-based block and allow rules,
+including Unicode message text. Blocked messages are suppressed from regular
+notifications and kept in a separate blocked folder.
+
+Messages can be archived, returned to the inbox, deleted, searched, grouped into
+conversations, and marked to skip automatic archiving. The app also includes
+OTP copy support, local import and export, dual-SIM send options, and light,
+dark, and OLED themes.
+
+SMS Shield does not use cloud spam detection, advertising SDKs, analytics SDKs,
+Firebase, Google Play Services, or external AI services.

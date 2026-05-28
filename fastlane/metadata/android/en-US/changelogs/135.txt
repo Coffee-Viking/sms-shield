@@ -1,0 +1,1 @@
+Added same-day time labels in the inbox, configurable AM/PM or 24h timestamps, conversation grouping refinements, archive and blocked folders, import/export, OTP copy, dual-SIM controls, and local block/allow filtering.

@@ -1,0 +1,1 @@
+Changed the permanent Android application id to ski.wischnew.shield and prepared GPL-3.0-only metadata for F-Droid submission.
