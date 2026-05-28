@@ -18,16 +18,16 @@ GPL-3.0-only
 
 ## Latest Release
 
-https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.36
+https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.37
 
 APK:
 
-https://github.com/Coffee-Viking/sms-shield/releases/download/v1.36/sms-shield_1.36.apk
+https://github.com/Coffee-Viking/sms-shield/releases/download/v1.37/sms-shield_1.37.apk
 
 Version:
 
-- `versionName`: `1.36`
-- `versionCode`: `136`
+- `versionName`: `1.37`
+- `versionCode`: `137`
 
 APK size: about 10 MB.
 
@@ -69,4 +69,3 @@ be used as a default SMS app:
 Fastlane metadata is included in the repository:
 
 `fastlane/metadata/android/en-US/`
-

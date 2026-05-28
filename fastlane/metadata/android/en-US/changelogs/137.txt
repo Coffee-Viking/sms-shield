@@ -1,0 +1,1 @@
+Improved block and allow list rows so long rules can wrap instead of being cut off.

@@ -32,13 +32,13 @@ Ready:
 - Git tag:
 
   ```text
-  v1.36
+  v1.37
   ```
 
 - GitHub Release with signed APK:
 
   ```text
-  https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.36
+  https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.37
   ```
 
 Still needed:

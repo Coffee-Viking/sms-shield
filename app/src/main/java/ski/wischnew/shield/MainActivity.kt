@@ -2432,7 +2432,7 @@ private fun messageSecondaryLine(message: SmsMessageRecord, activeSims: List<Sim
     return listOfNotNull(
         messageSimOverview(message, activeSims),
         if (message.autoArchiveFrozen) "Skip archiving" else null
-    ).takeIf { it.isNotEmpty() }?.joinToString(" â€?")
+    ).takeIf { it.isNotEmpty() }?.joinToString(" | ")
 }
 
 private fun messageSimDetail(message: SmsMessageRecord, activeSims: List<SimInfo>): String? {
@@ -3120,9 +3120,9 @@ private fun RuleRow(
         Row(
             modifier = Modifier.padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
-            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Top) {
                 Box(
                     modifier = Modifier
                         .size(44.dp)
@@ -3143,23 +3143,28 @@ private fun RuleRow(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Column {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
                     Text(
                         displayPattern,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 4,
+                        overflow = TextOverflow.Clip,
                         color = if (rule.enabled) MaterialTheme.colorScheme.onBackground else colors.muted
                     )
                     Text(if (rule.enabled) subtitle else "$subtitle - disabled", color = colors.muted)
                 }
             }
-            Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
-            IconButton(onClick = onEdit) {
-                Icon(Icons.Default.Edit, contentDescription = "Edit", tint = colors.muted)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = colors.muted)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = "Edit", tint = colors.muted)
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = colors.muted)
+                }
             }
         }
     }
