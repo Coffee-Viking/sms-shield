@@ -11,38 +11,62 @@ dependency and build-tooling perspective:
 - No Firebase, Play Services, ads, analytics, or remote AI services
 - Builds from the command line with `./gradlew assembleRelease`
 
-## Blockers Before Public Distribution
+## IzzyOnDroid Status
 
-1. Publish the source code.
+Ready:
 
-   Current id: `ski.wischnew.shield`
+- Public source repository:
 
-   Public repository:
+  ```text
+  https://github.com/Coffee-Viking/sms-shield
+  ```
 
-   ```text
-   https://github.com/Coffee-Viking/sms-shield
-   ```
+- Permanent app id:
 
-2. Commit and tag a release.
+  ```text
+  ski.wischnew.shield
+  ```
 
-   For current app version `1.36` / version code `136`, tag the release commit
-   as:
+- GPL-3.0-only license
+- Fastlane metadata: short description, full description, icon, changelog
+- Git tag:
 
-   ```bash
-   git tag v1.36
-   ```
+  ```text
+  v1.36
+  ```
 
-   In the fdroiddata build block, use the full commit hash for that release.
+- GitHub Release with signed APK:
 
-3. Add real screenshots.
+  ```text
+  https://github.com/Coffee-Viking/sms-shield/releases/tag/v1.36
+  ```
 
-   Put phone screenshots in:
+Still needed:
 
-   ```text
-   fastlane/metadata/android/en-US/images/phoneScreenshots/
-   ```
+- Add real screenshots.
 
-4. Prepare optional fdroiddata metadata.
+  Put phone screenshots in:
+
+  ```text
+  fastlane/metadata/android/en-US/images/phoneScreenshots/
+  ```
+
+- Open an app inclusion request at IzzyOnDroid's Codeberg issue tracker.
+
+  IzzyOnDroid asks requesters to read the inclusion criteria and then request
+  inclusion at their issue tracker:
+
+  ```text
+  https://izzyondroid.org/contact/
+  ```
+
+  A ready-to-paste issue body is in `IZZYONDROID_REQUEST.md`.
+
+## Optional Main F-Droid Status
+
+Main F-Droid is not the current target, but metadata is parked here for later.
+
+Prepare optional fdroiddata metadata:
 
    Copy `fdroid/metadata.template.yml` into the `fdroiddata` fork as:
 
@@ -75,14 +99,6 @@ Do not commit:
 - `mockup/`
 - `.gradle/`
 - `app/build/`
-
-## Suggested First Publishing Flow
-
-1. Push the source to `https://github.com/Coffee-Viking/sms-shield`.
-2. Create a `v1.36` Git tag.
-3. Attach the signed `sms-shield_1.36.apk` to a GitHub Release.
-4. Add real screenshots under Fastlane metadata.
-5. Submit to IzzyOnDroid, or use the GitHub Release with Obtainium.
 
 ## Optional Main F-Droid Flow
 

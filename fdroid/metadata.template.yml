@@ -1,7 +1,7 @@
 Categories:
   - Phone & SMS
 License: GPL-3.0-only
-AuthorName: REPLACE_WITH_AUTHOR_NAME
+AuthorName: Coffee-Viking
 SourceCode: https://github.com/Coffee-Viking/sms-shield
 IssueTracker: https://github.com/Coffee-Viking/sms-shield/issues
 
@@ -11,7 +11,7 @@ Repo: https://github.com/Coffee-Viking/sms-shield.git
 Builds:
   - versionName: '1.36'
     versionCode: 136
-    commit: REPLACE_WITH_V1_36_COMMIT_HASH
+    commit: 0a50e2190bde72feb065ba463481f87390643584
     subdir: app
     gradle:
       - release
