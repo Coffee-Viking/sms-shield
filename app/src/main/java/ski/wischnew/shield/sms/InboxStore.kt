@@ -58,11 +58,7 @@ class InboxStore(private val context: Context) {
     fun addReceivedMessage(message: SmsMessageRecord): Boolean {
         val existing = listMessages()
         if (existing.any { it.isLikelyDuplicateOf(message) }) return false
-        val storedMessage = if (message.blocked) {
-            message
-        } else {
-            writeToSystemSmsProvider(message, outgoing = false, adoptProviderId = true)
-        }
+        val storedMessage = writeToSystemSmsProvider(message, outgoing = false, adoptProviderId = true)
         val updated = existing.toMutableList().apply { add(0, storedMessage) }.take(500)
         saveMessages(updated)
         return true
