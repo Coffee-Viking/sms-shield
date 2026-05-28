@@ -11,7 +11,7 @@ Repo: https://github.com/Coffee-Viking/sms-shield.git
 Builds:
   - versionName: '1.37'
     versionCode: 137
-    commit: REPLACE_WITH_V1_37_COMMIT_HASH
+    commit: 60196bc00a60757b7fad44e2c1ea6163a2b762fa
     subdir: app
     gradle:
       - release
