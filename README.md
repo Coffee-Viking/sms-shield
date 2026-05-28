@@ -34,6 +34,5 @@ See `LICENSE`.
 
 Publishing prep is tracked in `PUBLISHING.md`.
 
-Before submission, the project still needs:
-
-- Real screenshots for the F-Droid listing
+The current publishing path is GitHub Releases plus IzzyOnDroid. Fastlane
+metadata and screenshots are included in this repository.
