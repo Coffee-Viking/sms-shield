@@ -18,6 +18,7 @@ keystore.properties
 release/
 backups/
 mockup/
+private-notes/
 
 # Working design/source images that are not needed to build the app
 /images/
