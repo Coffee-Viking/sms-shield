@@ -130,6 +130,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+    private var requestedMessageId by mutableStateOf<Long?>(null)
     private val requestRoleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
     private val requestSmsPermissionsLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         InboxStore.notifyMessagesUpdated(this)
@@ -137,6 +138,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestedMessageId = openMessageIdFromIntent(intent)
         SmsNotifications.ensureChannel(this)
         maybeRequestDefaultSmsRole()
         val settingsStore = AppSettingsStore(this)
@@ -165,6 +167,7 @@ class MainActivity : ComponentActivity() {
                     autoDeleteBlockedDays = autoDeleteBlockedDays,
                     warnBeforeBlockedAutoDelete = warnBeforeBlockedAutoDelete,
                     conversationSplitHours = conversationSplitHours,
+                    notificationMessageId = requestedMessageId,
                     onThemeModeChange = {
                         themeMode = it
                         settingsStore.setThemeMode(it)
@@ -204,10 +207,19 @@ class MainActivity : ComponentActivity() {
                     onConversationSplitHoursChange = {
                         conversationSplitHours = it
                         settingsStore.setConversationSplitHours(it)
+                    },
+                    onNotificationMessageHandled = {
+                        requestedMessageId = null
                     }
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        requestedMessageId = openMessageIdFromIntent(intent)
     }
 
     override fun onResume() {
@@ -218,8 +230,13 @@ class MainActivity : ComponentActivity() {
                     InboxStore(this@MainActivity).importFromDeviceInbox()
                     InboxStore.notifyMessagesUpdated(this@MainActivity)
                 }
-            }
         }
+    }
+
+    private fun openMessageIdFromIntent(intent: Intent?): Long? {
+        if (intent?.action != ACTION_OPEN_MESSAGE) return null
+        return intent.getLongExtra(EXTRA_OPEN_MESSAGE_ID, -1L).takeIf { it > 0L }
+    }
 
     private fun maybeRequestDefaultSmsRole() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -261,6 +278,11 @@ class MainActivity : ComponentActivity() {
         if (missing.isNotEmpty()) {
             requestSmsPermissionsLauncher.launch(missing.toTypedArray())
         }
+    }
+
+    companion object {
+        const val ACTION_OPEN_MESSAGE = "ski.wischnew.shield.OPEN_MESSAGE"
+        const val EXTRA_OPEN_MESSAGE_ID = "open_message_id"
     }
 }
 
@@ -390,6 +412,7 @@ private fun SmsShieldApp(
     autoDeleteBlockedDays: Int?,
     warnBeforeBlockedAutoDelete: Boolean,
     conversationSplitHours: Int?,
+    notificationMessageId: Long?,
     onThemeModeChange: (ThemeMode) -> Unit,
     onAccentColorChange: (Color) -> Unit,
     onDeliveryReportsChange: (Boolean) -> Unit,
@@ -399,7 +422,8 @@ private fun SmsShieldApp(
     onAutoArchiveDaysChange: (Int?) -> Unit,
     onAutoDeleteBlockedDaysChange: (Int?) -> Unit,
     onWarnBeforeBlockedAutoDeleteChange: (Boolean) -> Unit,
-    onConversationSplitHoursChange: (Int?) -> Unit
+    onConversationSplitHoursChange: (Int?) -> Unit,
+    onNotificationMessageHandled: () -> Unit
 ) {
     var screen by remember { mutableStateOf(Screen.MAIN) }
     var showComposeDialog by remember { mutableStateOf(false) }
@@ -709,6 +733,24 @@ private fun SmsShieldApp(
         }
         messages = loadedMessages
         messagesLoaded = true
+    }
+
+    LaunchedEffect(messagesLoaded, messages, notificationMessageId) {
+        val targetId = notificationMessageId ?: return@LaunchedEffect
+        if (!messagesLoaded) return@LaunchedEffect
+        messages.firstOrNull { it.id == targetId }?.let { message ->
+            screen = Screen.MAIN
+            selectedMessage = message
+            selectedConversationKey = null
+            searchActive = false
+            searchQuery = ""
+            restoreSearchAfterDetail = false
+            mainSelectionActive = false
+            if (drawerState.isOpen) {
+                drawerState.close()
+            }
+        }
+        onNotificationMessageHandled()
     }
 
     LaunchedEffect(autoDeleteBlockedDays, warnBeforeBlockedAutoDelete) {

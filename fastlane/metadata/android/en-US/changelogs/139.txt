@@ -1,3 +1,4 @@
 Minor refactoring edit.
 Blocked message details now show matching block rules.
 Adjusted highlight colors.
+Notification taps now open the received message in the inbox.

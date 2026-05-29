@@ -42,7 +42,9 @@ object SmsNotifications {
         ensureChannel(context)
 
         val openIntent = Intent(context, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_OPEN_MESSAGE
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_OPEN_MESSAGE_ID, message.id)
         }
         val pendingIntent = PendingIntent.getActivity(
             context,

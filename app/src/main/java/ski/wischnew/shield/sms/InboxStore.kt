@@ -55,13 +55,13 @@ class InboxStore(private val context: Context) {
         return true
     }
 
-    fun addReceivedMessage(message: SmsMessageRecord): Boolean {
+    fun addReceivedMessage(message: SmsMessageRecord): SmsMessageRecord? {
         val existing = listMessages()
-        if (existing.any { it.isLikelyDuplicateOf(message) }) return false
+        if (existing.any { it.isLikelyDuplicateOf(message) }) return null
         val storedMessage = writeToSystemSmsProvider(message, outgoing = false, adoptProviderId = true)
         val updated = existing.toMutableList().apply { add(0, storedMessage) }.take(500)
         saveMessages(updated)
-        return true
+        return storedMessage
     }
 
     fun addSentMessage(message: SmsMessageRecord): Boolean {

@@ -42,8 +42,8 @@ class SmsReceiver : BroadcastReceiver() {
             simDisplayName = simFields.displayName,
             simCarrierName = simFields.carrierName
         )
-        val added = InboxStore(context).addReceivedMessage(message)
-        if (added) {
+        val storedMessage = InboxStore(context).addReceivedMessage(message)
+        if (storedMessage != null) {
             InboxStore.notifyMessagesUpdated(context)
         }
 
@@ -53,7 +53,7 @@ class SmsReceiver : BroadcastReceiver() {
         }
 
         if (intent.action == Telephony.Sms.Intents.SMS_DELIVER_ACTION) {
-            SmsNotifications.showIncomingMessage(context, message)
+            SmsNotifications.showIncomingMessage(context, storedMessage ?: message)
         }
     }
 }
