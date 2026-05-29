@@ -35,7 +35,7 @@ from the release .apk, you need to pause Google Play Protect.
 Step-by-Step:
 
 - Open the Google Play Store app.
-- Tap on the profile icon in teh top right corner
+- Tap on the profile icon in the top right corner
 - Tap on the "Play Protect" button
 - Click the settings (cog) icon in the top right corner
 - Deactivate the setting "Scan Apps with Play Protect"
