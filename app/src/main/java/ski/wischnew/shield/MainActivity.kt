@@ -1098,7 +1098,7 @@ private fun SmsShieldApp(
                         onExportBackup = {
                             if (backupSelection.anySelected) {
                                 backupNotice = null
-                                exportBackupLauncher.launch("sms-shield-backup.json")
+                                exportBackupLauncher.launch(timestampedBackupFilename())
                             }
                         },
                         onImportBackup = {
@@ -2418,6 +2418,11 @@ private fun fullDateTimeLabel(timestamp: Long, use24HourTime: Boolean): String {
         if (use24HourTime) "EEE, d MMM yyyy, HH:mm" else "EEE, d MMM yyyy, h:mm a",
         Locale.getDefault()
     ).format(Date(timestamp))
+}
+
+private fun timestampedBackupFilename(): String {
+    val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    return "sms-shield-backup-$timestamp.json"
 }
 
 private fun isTimestampInCurrentWeek(timestamp: Long): Boolean {
