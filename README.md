@@ -13,9 +13,9 @@ It can be used as the default SMS app and supports:
 - Local import and export of app data via JSON file
 - Light, dark, and AMOLED themes with selectable accent colors
 
-The app does not use any web services or data at all. No cloud spam detection,
-no advertising SDKs, no analytics SDKs, no Firebase, no Google Play Services,
-no external AI services.
+The app does not use any web services or data connectivity at all. No cloud
+spam detection, no advertising SDKs, no analytics SDKs, no Firebase, no Google
+Play Services, no AI services. Pure rule-based on-device handling.
 
 ## Build
 
