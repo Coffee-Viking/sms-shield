@@ -29,10 +29,3 @@ Do not commit release keys or generated APKs.
 
 SMS Shield is licensed under the GNU General Public License version 3.0 only.
 See `LICENSE`.
-
-## Publishing Status
-
-Publishing prep is tracked in `PUBLISHING.md`.
-
-The current publishing path is GitHub Releases plus IzzyOnDroid. Fastlane
-metadata and screenshots are included in this repository.
