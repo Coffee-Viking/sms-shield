@@ -2765,8 +2765,15 @@ private fun MessageDetailView(
                         Button(onClick = onForward, shape = RoundedCornerShape(14.dp)) {
                             Text("Forward")
                         }
-                        TextButton(onClick = { showDeleteConfirm = true }) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        Button(
+                            onClick = { showDeleteConfirm = true },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Delete")
                         }
                     }
                     if (!message.archived) {
