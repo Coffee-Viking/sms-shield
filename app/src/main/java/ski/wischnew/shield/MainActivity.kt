@@ -100,6 +100,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ski.wischnew.shield.contacts.ContactDisplay
 import ski.wischnew.shield.contacts.ContactLookup
+import ski.wischnew.shield.rules.FilterEngine
 import ski.wischnew.shield.rules.Rule
 import ski.wischnew.shield.rules.RuleAction
 import ski.wischnew.shield.rules.RuleStore
@@ -665,6 +666,19 @@ private fun SmsShieldApp(
         inboxStore.deleteMessages(ids)
         inboxVersion++
     }
+    val blockRulesForMessage: (SmsMessageRecord) -> List<Rule> = { message ->
+        if (!message.blocked) {
+            emptyList()
+        } else {
+            FilterEngine().matchingRules(
+                sender = message.sender,
+                body = message.body,
+                rules = ruleStore.getRules(),
+                defaultRegion = Locale.getDefault().country.ifBlank { "US" },
+                action = RuleAction.BLOCK
+            )
+        }
+    }
     val handleBackNavigation: () -> Unit = {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
@@ -893,6 +907,7 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
+                                blockedRuleHits = blockRulesForMessage(selectedMessage!!),
                                 onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
@@ -923,6 +938,7 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
+                                blockedRuleHits = blockRulesForMessage(selectedMessage!!),
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -972,6 +988,7 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
+                                blockedRuleHits = blockRulesForMessage(selectedMessage!!),
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -1016,6 +1033,7 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
+                                blockedRuleHits = blockRulesForMessage(selectedMessage!!),
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -2569,6 +2587,7 @@ private fun MessageDetailView(
     colors: UiColors,
     activeSims: List<SimInfo>,
     use24HourTime: Boolean,
+    blockedRuleHits: List<Rule> = emptyList(),
     onSelectThreadMessage: (SmsMessageRecord) -> Unit = {},
     onReply: () -> Unit,
     onForward: () -> Unit,
@@ -2684,6 +2703,19 @@ private fun MessageDetailView(
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (message.blocked) {
+                        Text(
+                            blockedRuleHitText(blockedRuleHits),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Text(
+                        "Highlight text to add to block/allow list",
+                        color = colors.muted,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     if (otpCode != null) {
                         Button(
                             onClick = {
@@ -2696,11 +2728,6 @@ private fun MessageDetailView(
                             Text("Copy OTP: $otpCode", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    Text(
-                        "Highlight text to add to block/allow list",
-                        color = colors.muted,
-                        style = MaterialTheme.typography.bodySmall
-                    )
                     if (selectedText.isNotBlank()) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -3618,6 +3645,25 @@ private fun JSONObject.optLongOrNull(name: String): Long? {
 
 private fun ruleDisplay(rule: Rule): String {
     return if (rule.type == RuleType.COUNTRY) countryLabelForCode(rule.pattern) else rule.pattern
+}
+
+private fun blockedRuleHitText(rules: List<Rule>): String {
+    if (rules.isEmpty()) return "No active matching block rule found"
+    return if (rules.size == 1) {
+        "Matched block rule: ${ruleHitLabel(rules.first())}"
+    } else {
+        "Matched block rules:\n" + rules.joinToString("\n") { "- ${ruleHitLabel(it)}" }
+    }
+}
+
+private fun ruleHitLabel(rule: Rule): String {
+    val type = when (rule.type) {
+        RuleType.KEYWORD -> "Keyword"
+        RuleType.SENDER -> "Sender"
+        RuleType.NUMBER -> "Number"
+        RuleType.COUNTRY -> "Country"
+    }
+    return "$type: ${ruleDisplay(rule)}"
 }
 
 private fun RuleAction.label(): String {

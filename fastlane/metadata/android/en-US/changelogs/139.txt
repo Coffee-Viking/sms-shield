@@ -1,1 +1,2 @@
 Minor refactoring edit.
+Blocked message details now show matching block rules.

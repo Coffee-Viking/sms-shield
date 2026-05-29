@@ -17,6 +17,25 @@ class FilterEngine {
         return decide(sender, body, rules, defaultRegion) == Decision.BLOCK
     }
 
+    fun matchingRules(
+        sender: String?,
+        body: String,
+        rules: List<Rule>,
+        defaultRegion: String,
+        action: RuleAction
+    ): List<Rule> {
+        val normalizedBody = normalizeText(body)
+        val senderAddress = senderAddress(sender)
+        val normalizedSender = normalizeText(senderAddress)
+        val senderDigits = normalizeDigits(senderAddress)
+        val senderCountry = getCountryIso(senderAddress, defaultRegion)
+        return rules.filter { rule ->
+            rule.enabled &&
+                rule.action == action &&
+                ruleMatches(rule, normalizedBody, normalizedSender, senderDigits, senderCountry)
+        }
+    }
+
     fun decide(sender: String?, body: String, rules: List<Rule>, defaultRegion: String): Decision {
         val normalizedBody = normalizeText(body)
         val senderAddress = senderAddress(sender)
@@ -28,35 +47,15 @@ class FilterEngine {
         val allowMatched = enabledRules
             .filter { it.action == RuleAction.ALLOW }
             .any { rule ->
-                when (rule.type) {
-                    RuleType.KEYWORD -> wildcardContains(normalizedBody, normalizeText(rule.pattern))
-                    RuleType.SENDER -> wildcardExact(normalizedSender, normalizeText(rule.pattern))
-                    RuleType.NUMBER -> {
-                        val patternDigits = normalizeDigits(rule.pattern)
-                        if (rule.partialNumber) senderDigits.contains(patternDigits) else wildcardExact(senderDigits, patternDigits)
-                    }
-                    RuleType.COUNTRY -> senderCountry.equals(rule.pattern.uppercase(Locale.ROOT), ignoreCase = true)
-                }
+                ruleMatches(rule, normalizedBody, normalizedSender, senderDigits, senderCountry)
             }
         if (allowMatched) return Decision.ALLOW
 
         val blockMatched = enabledRules
             .filter { it.action == RuleAction.BLOCK }
             .any { rule ->
-                when (rule.type) {
-                RuleType.KEYWORD -> wildcardContains(normalizedBody, normalizeText(rule.pattern))
-                RuleType.SENDER -> wildcardExact(normalizedSender, normalizeText(rule.pattern))
-                RuleType.NUMBER -> {
-                    val patternDigits = normalizeDigits(rule.pattern)
-                    if (rule.partialNumber) {
-                        senderDigits.contains(patternDigits)
-                    } else {
-                        wildcardExact(senderDigits, patternDigits)
-                    }
-                }
-                RuleType.COUNTRY -> senderCountry.equals(rule.pattern.uppercase(Locale.ROOT), ignoreCase = true)
+                ruleMatches(rule, normalizedBody, normalizedSender, senderDigits, senderCountry)
             }
-        }
         return if (blockMatched) Decision.BLOCK else Decision.ALLOW
     }
 
@@ -67,6 +66,28 @@ class FilterEngine {
         sender.orEmpty().removePrefix("To:").trim()
 
     private fun normalizeDigits(number: String): String = number.filter { it.isDigit() || it == '+' }
+
+    private fun ruleMatches(
+        rule: Rule,
+        normalizedBody: String,
+        normalizedSender: String,
+        senderDigits: String,
+        senderCountry: String?
+    ): Boolean {
+        return when (rule.type) {
+            RuleType.KEYWORD -> wildcardContains(normalizedBody, normalizeText(rule.pattern))
+            RuleType.SENDER -> wildcardExact(normalizedSender, normalizeText(rule.pattern))
+            RuleType.NUMBER -> {
+                val patternDigits = normalizeDigits(rule.pattern)
+                if (rule.partialNumber) {
+                    senderDigits.contains(patternDigits)
+                } else {
+                    wildcardExact(senderDigits, patternDigits)
+                }
+            }
+            RuleType.COUNTRY -> senderCountry.equals(rule.pattern.uppercase(Locale.ROOT), ignoreCase = true)
+        }
+    }
 
     private fun wildcardExact(value: String, pattern: String): Boolean {
         val regex = pattern.split("*").joinToString(".*") { Regex.escape(it) }
