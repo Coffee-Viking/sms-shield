@@ -11,7 +11,7 @@ It can be used as the default SMS app and supports:
 - Dual-SIM send options and SIM indicators
 - OTP copy support
 - Local import and export of app data
-- Light, dark, and OLED themes with selectable accent colors
+- Light, dark, and AMOLED themes with selectable accent colors
 
 The app does not use cloud spam detection, advertising SDKs, analytics SDKs,
 Firebase, Google Play Services, or external AI services.

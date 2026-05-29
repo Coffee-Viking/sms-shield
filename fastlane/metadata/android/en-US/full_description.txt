@@ -7,7 +7,7 @@ notifications and kept in a separate blocked folder.
 Messages can be archived, returned to the inbox, deleted, searched, grouped into
 conversations, and marked to skip automatic archiving. The app also includes
 OTP copy support, local import and export, dual-SIM send options, and light,
-dark, and OLED themes.
+dark, and AMOLED themes.
 
 SMS Shield does not use cloud spam detection, advertising SDKs, analytics SDKs,
 Firebase, Google Play Services, or external AI services.

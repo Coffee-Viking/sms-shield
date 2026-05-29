@@ -4175,7 +4175,7 @@ private fun ThemeSelector(themeMode: ThemeMode, onThemeModeChange: (ThemeMode) -
                 ThemeMode.DARK -> 1
                 ThemeMode.OLED -> 2
             },
-            labels = listOf("Light", "Dark", "OLED"),
+            labels = listOf("Light", "Dark", "AMOLED"),
             accentColor = MaterialTheme.colorScheme.primary,
             colors = colors,
             onSelected = {
