@@ -87,6 +87,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -152,6 +153,7 @@ class MainActivity : ComponentActivity() {
             var autoArchiveDays by remember { mutableStateOf(settingsStore.getAutoArchiveDays()) }
             var autoDeleteBlockedDays by remember { mutableStateOf(settingsStore.getAutoDeleteBlockedDays()) }
             var warnBeforeBlockedAutoDelete by remember { mutableStateOf(settingsStore.getWarnBeforeBlockedAutoDelete()) }
+            var chatModeEnabled by remember { mutableStateOf(settingsStore.getChatModeEnabled()) }
             var conversationSplitHours by remember { mutableStateOf(settingsStore.getConversationSplitHours()) }
             SmsShieldTheme(themeMode = themeMode, accentColor = accentColor) {
                 SmsShieldApp(
@@ -166,6 +168,7 @@ class MainActivity : ComponentActivity() {
                     autoArchiveDays = autoArchiveDays,
                     autoDeleteBlockedDays = autoDeleteBlockedDays,
                     warnBeforeBlockedAutoDelete = warnBeforeBlockedAutoDelete,
+                    chatModeEnabled = chatModeEnabled,
                     conversationSplitHours = conversationSplitHours,
                     notificationMessageId = requestedMessageId,
                     onThemeModeChange = {
@@ -203,6 +206,10 @@ class MainActivity : ComponentActivity() {
                     onWarnBeforeBlockedAutoDeleteChange = {
                         warnBeforeBlockedAutoDelete = it
                         settingsStore.setWarnBeforeBlockedAutoDelete(it)
+                    },
+                    onChatModeEnabledChange = {
+                        chatModeEnabled = it
+                        settingsStore.setChatModeEnabled(it)
                     },
                     onConversationSplitHoursChange = {
                         conversationSplitHours = it
@@ -411,6 +418,7 @@ private fun SmsShieldApp(
     autoArchiveDays: Int?,
     autoDeleteBlockedDays: Int?,
     warnBeforeBlockedAutoDelete: Boolean,
+    chatModeEnabled: Boolean,
     conversationSplitHours: Int?,
     notificationMessageId: Long?,
     onThemeModeChange: (ThemeMode) -> Unit,
@@ -422,6 +430,7 @@ private fun SmsShieldApp(
     onAutoArchiveDaysChange: (Int?) -> Unit,
     onAutoDeleteBlockedDaysChange: (Int?) -> Unit,
     onWarnBeforeBlockedAutoDeleteChange: (Boolean) -> Unit,
+    onChatModeEnabledChange: (Boolean) -> Unit,
     onConversationSplitHoursChange: (Int?) -> Unit,
     onNotificationMessageHandled: () -> Unit
 ) {
@@ -479,9 +488,9 @@ private fun SmsShieldApp(
     val selectedMessageTitle = remember(selectedMessage?.id, selectedMessage?.sender, contactsGranted) {
         selectedMessage?.let { ContactLookup.resolveSender(context, it.sender).primary }
     }
-    val selectedConversation = remember(selectedConversationKey, messages, conversationSplitHours, contactsGranted) {
+    val selectedConversation = remember(selectedConversationKey, messages, chatModeEnabled, conversationSplitHours, contactsGranted) {
         selectedConversationKey?.let { key ->
-            conversationThreads(context, messages.filter { !it.blocked && !it.archived }, conversationSplitHours)
+            conversationThreads(context, messages.filter { !it.blocked && !it.archived }, chatModeEnabled, conversationSplitHours)
                 .firstOrNull { it.key == key }
         }
     }
@@ -511,6 +520,7 @@ private fun SmsShieldApp(
         onAutoArchiveDaysChange(appSettingsStore.getAutoArchiveDays())
         onAutoDeleteBlockedDaysChange(appSettingsStore.getAutoDeleteBlockedDays())
         onWarnBeforeBlockedAutoDeleteChange(appSettingsStore.getWarnBeforeBlockedAutoDelete())
+        onChatModeEnabledChange(appSettingsStore.getChatModeEnabled())
         onConversationSplitHoursChange(appSettingsStore.getConversationSplitHours())
     }
     val completeBackupImport: (ParsedBackup) -> Unit = { backup ->
@@ -1012,6 +1022,7 @@ private fun SmsShieldApp(
                                 searchQuery = searchQuery,
                                 accentColor = accentColor,
                                 activeSims = activeSims,
+                                chatModeEnabled = chatModeEnabled,
                                 conversationSplitHours = conversationSplitHours,
                                 listState = inboxListState,
                                 use24HourTime = use24HourTime,
@@ -1132,6 +1143,7 @@ private fun SmsShieldApp(
                         autoArchiveDays = autoArchiveDays,
                         autoDeleteBlockedDays = autoDeleteBlockedDays,
                         warnBeforeBlockedAutoDelete = warnBeforeBlockedAutoDelete,
+                        chatModeEnabled = chatModeEnabled,
                         conversationSplitHours = conversationSplitHours,
                         onThemeModeChange = onThemeModeChange,
                         onAccentColorChange = onAccentColorChange,
@@ -1148,6 +1160,7 @@ private fun SmsShieldApp(
                             cleanupApplyVersion++
                         },
                         onWarnBeforeBlockedAutoDeleteChange = onWarnBeforeBlockedAutoDeleteChange,
+                        onChatModeEnabledChange = onChatModeEnabledChange,
                         onConversationSplitHoursChange = onConversationSplitHoursChange,
                         backupSelection = backupSelection,
                         backupNotice = backupNotice,
@@ -1631,6 +1644,7 @@ private fun MainListView(
     searchQuery: String,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    chatModeEnabled: Boolean,
     conversationSplitHours: Int?,
     listState: LazyListState,
     use24HourTime: Boolean,
@@ -1654,8 +1668,8 @@ private fun MainListView(
         val availableIds = inboxMessages.map { it.id }.toSet()
         selectedIds = selectedIds.filter { it in availableIds }.toSet()
     }
-    val conversations = remember(inboxMessages, conversationSplitHours, contactsGranted) {
-        conversationThreads(context, inboxMessages, conversationSplitHours)
+    val conversations = remember(inboxMessages, chatModeEnabled, conversationSplitHours, contactsGranted) {
+        conversationThreads(context, inboxMessages, chatModeEnabled, conversationSplitHours)
     }
     val filteredConversations = remember(conversations, searchQuery, contactsGranted, activeSims) {
         val query = searchQuery.trim()
@@ -2369,7 +2383,18 @@ private fun messageStatus(message: SmsMessageRecord): String {
     }
 }
 
-private fun conversationThreads(context: Context, messages: List<SmsMessageRecord>, splitAfterHours: Int?): List<ConversationThread> {
+private fun conversationThreads(
+    context: Context,
+    messages: List<SmsMessageRecord>,
+    chatModeEnabled: Boolean,
+    splitAfterHours: Int?
+): List<ConversationThread> {
+    if (!chatModeEnabled) {
+        return messages
+            .sortedByDescending { it.timestamp }
+            .map { message -> ConversationThread("single:${message.id}", listOf(message)) }
+    }
+
     val splitMillis = splitAfterHours?.takeIf { it > 0 }?.toLong()?.times(MILLIS_PER_HOUR)
     return messages
         .groupBy { conversationAddressKey(context, it) }
@@ -3935,6 +3960,7 @@ private fun SettingsView(
     autoArchiveDays: Int?,
     autoDeleteBlockedDays: Int?,
     warnBeforeBlockedAutoDelete: Boolean,
+    chatModeEnabled: Boolean,
     conversationSplitHours: Int?,
     onThemeModeChange: (ThemeMode) -> Unit,
     onAccentColorChange: (Color) -> Unit,
@@ -3945,6 +3971,7 @@ private fun SettingsView(
     onAutoArchiveDaysChange: (Int?) -> Unit,
     onAutoDeleteBlockedDaysChange: (Int?) -> Unit,
     onWarnBeforeBlockedAutoDeleteChange: (Boolean) -> Unit,
+    onChatModeEnabledChange: (Boolean) -> Unit,
     onConversationSplitHoursChange: (Int?) -> Unit,
     backupSelection: BackupSelection,
     backupNotice: String?,
@@ -3985,14 +4012,27 @@ private fun SettingsView(
         }
         item {
             SettingsGroup(title = "Conversations", colors = colors) {
+                Text(
+                    "Message exchanges and multiple messages to/from the same sender can be grouped and displayed as Chats.",
+                    color = colors.muted,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                )
+                SettingsSwitchRow(
+                    title = "Use Chat mode",
+                    subtitle = "Group message exchanges as chats",
+                    checked = chatModeEnabled,
+                    colors = colors,
+                    onCheckedChange = onChatModeEnabledChange
+                )
                 CleanupSettingRow(
                     title = "Split conversations",
-                    subtitle = "Start a new chat after this many inactive hours",
-                    value = conversationSplitHours,
+                    subtitle = "After this many hours of inactivity, messages to/from the same person will be displayed as a new chat instead of a continuation of the previous exchange.",
+                    value = if (chatModeEnabled) conversationSplitHours else null,
                     placeholder = "No split",
                     unitLabel = "hour",
                     inputLabel = "Hours",
                     colors = colors,
+                    enabled = chatModeEnabled,
                     onToggle = {
                         cleanupNotice = if (it == null) "Conversation splitting disabled" else "Conversation grouping updated"
                         onConversationSplitHoursChange(it)
@@ -4075,7 +4115,7 @@ private fun SettingsView(
             text = {
                 Text(
                     when (notice) {
-                        "Processing inbox now" -> "SMS Shield is checking matching messages now."
+                        "Processing inbox now" -> "SMS Shield is archiving matching messages now."
                         "Processing blocked messages" -> "SMS Shield is checking blocked messages now."
                         "Enter number of days first" -> "Type a day count, then turn the switch on."
                         "Enter number of hours first" -> "Type an hour count, then turn the switch on."
@@ -4403,15 +4443,17 @@ private fun CleanupSettingRow(
     unitLabel: String = "day",
     inputLabel: String = "Days",
     colors: UiColors,
+    enabled: Boolean = true,
     onToggle: (Int?) -> Unit,
     onMissingValue: () -> Unit
 ) {
     var text by remember(value) { mutableStateOf(value?.toString().orEmpty()) }
-    var enabled by remember(value) { mutableStateOf(value != null) }
+    var switchEnabled by remember(value, enabled) { mutableStateOf(enabled && value != null) }
     val draftValue = text.toIntOrNull()?.takeIf { it > 0 }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.45f)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -4423,19 +4465,20 @@ private fun CleanupSettingRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (enabled && draftValue != null) "Active: $draftValue $unitLabel${if (draftValue == 1) "" else "s"}" else "Off",
+                    if (enabled && switchEnabled && draftValue != null) "Active: $draftValue $unitLabel${if (draftValue == 1) "" else "s"}" else "Off",
                     color = colors.muted
                 )
             }
             Spacer(Modifier.width(12.dp))
             Switch(
-                checked = enabled,
+                checked = switchEnabled,
+                enabled = enabled,
                 onCheckedChange = { checked ->
                     if (checked && draftValue == null) {
-                        enabled = false
+                        switchEnabled = false
                         onMissingValue()
                     } else {
-                        enabled = checked
+                        switchEnabled = checked
                         onToggle(if (checked) draftValue else null)
                     }
                 }
@@ -4448,11 +4491,12 @@ private fun CleanupSettingRow(
                 val digits = raw.filter { it.isDigit() }.take(4)
                 text = digits
                 if (digits.toIntOrNull()?.takeIf { it > 0 } != value) {
-                    enabled = false
+                    switchEnabled = false
                 }
             },
             label = { Text(inputLabel) },
             placeholder = { Text(placeholder) },
+            enabled = enabled,
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )

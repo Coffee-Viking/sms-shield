@@ -128,6 +128,14 @@ class AppSettingsStore(context: Context) {
         prefs.edit().putBoolean("warn_before_blocked_auto_delete", warn).apply()
     }
 
+    fun getChatModeEnabled(): Boolean {
+        return prefs.getBoolean("chat_mode_enabled", true)
+    }
+
+    fun setChatModeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("chat_mode_enabled", enabled).apply()
+    }
+
     fun getConversationSplitHours(): Int? {
         return prefs.getInt("conversation_split_hours", DEFAULT_CONVERSATION_SPLIT_HOURS).takeIf { it > 0 }
     }
@@ -147,6 +155,7 @@ class AppSettingsStore(context: Context) {
             .put("autoArchiveDays", getAutoArchiveDays() ?: JSONObject.NULL)
             .put("autoDeleteBlockedDays", getAutoDeleteBlockedDays() ?: JSONObject.NULL)
             .put("warnBeforeBlockedAutoDelete", getWarnBeforeBlockedAutoDelete())
+            .put("chatModeEnabled", getChatModeEnabled())
             .put("conversationSplitHours", getConversationSplitHours() ?: JSONObject.NULL)
     }
 
@@ -183,6 +192,9 @@ class AppSettingsStore(context: Context) {
         }
         if (obj.has("warnBeforeBlockedAutoDelete")) {
             editor.putBoolean("warn_before_blocked_auto_delete", obj.optBoolean("warnBeforeBlockedAutoDelete", true))
+        }
+        if (obj.has("chatModeEnabled")) {
+            editor.putBoolean("chat_mode_enabled", obj.optBoolean("chatModeEnabled", true))
         }
         if (obj.has("conversationSplitHours")) {
             editor.putInt("conversation_split_hours", if (obj.isNull("conversationSplitHours")) 0 else obj.optInt("conversationSplitHours", DEFAULT_CONVERSATION_SPLIT_HOURS).coerceAtLeast(0))

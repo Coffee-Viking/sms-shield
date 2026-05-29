@@ -1,0 +1,3 @@
+Updated chat grouping logic.
+Some rephrasing of default messages.
+Minor cosmetic changes.
