@@ -2578,7 +2578,7 @@ private fun MessageDetailView(
     onAddRule: (RuleAction, RuleType, String) -> Unit
 ) {
     val senderDisplay = rememberContactDisplay(message)
-    val senderNumber = remember(message.sender) { phoneAddressForRule(message.sender) }
+    val senderRule = remember(message.sender) { senderRuleForMessage(message.sender) }
     val simDetail = remember(message, activeSims) { messageSimDetail(message, activeSims) }
     var showDeleteConfirm by remember(message.id) { mutableStateOf(false) }
     var showArchiveConfirm by remember(message.id) { mutableStateOf(false) }
@@ -2640,30 +2640,30 @@ private fun MessageDetailView(
                             message.blocked
                         )
                     }
-                    if (senderNumber != null) {
+                    if (senderRule != null) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.BLOCK, RuleType.NUMBER, senderNumber)
-                                    addedNotice = "Added number to block list."
+                                    onAddRule(RuleAction.BLOCK, senderRule.type, senderRule.pattern)
+                                    addedNotice = "Added sender to block list."
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("Block Number", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Block Sender", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.ALLOW, RuleType.NUMBER, senderNumber)
-                                    addedNotice = "Added number to allow list."
+                                    onAddRule(RuleAction.ALLOW, senderRule.type, senderRule.pattern)
+                                    addedNotice = "Added sender to allow list."
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("Allow Number", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Allow Sender", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -2831,9 +2831,15 @@ private fun rememberContactDisplay(message: SmsMessageRecord): ContactDisplay {
     }
 }
 
-private fun phoneAddressForRule(sender: String): String? {
+private data class SenderRuleCandidate(val type: RuleType, val pattern: String)
+
+private fun senderRuleForMessage(sender: String): SenderRuleCandidate? {
     val address = sender.removePrefix("To:").trim()
-    return address.takeIf { candidate -> candidate.any { it.isDigit() } }
+    if (address.isBlank()) return null
+    return SenderRuleCandidate(
+        type = if (address.any { it.isDigit() }) RuleType.NUMBER else RuleType.SENDER,
+        pattern = address
+    )
 }
 
 private fun shouldShowSendSimPicker(
@@ -3142,6 +3148,7 @@ private fun RuleRow(
 ) {
     val subtitle = when (rule.type) {
         RuleType.KEYWORD -> "Keyword match"
+        RuleType.SENDER -> "Sender match"
         RuleType.NUMBER -> if (rule.partialNumber) "Number contains" else "Number exact or wildcard"
         RuleType.COUNTRY -> "Country"
     }
@@ -3262,11 +3269,20 @@ private fun RuleEditorDialog(
                         pattern = it
                         selectedCountry = null
                     },
-                    label = { Text(if (type == RuleType.COUNTRY) "Country" else "Pattern") },
+                    label = {
+                        Text(
+                            when (type) {
+                                RuleType.COUNTRY -> "Country"
+                                RuleType.SENDER -> "Sender"
+                                else -> "Pattern"
+                            }
+                        )
+                    },
                     placeholder = {
                         Text(
                             when (type) {
                                 RuleType.KEYWORD -> "Example: verification or *promo*"
+                                RuleType.SENDER -> "Example: DHL, MYBANK, *INFO*"
                                 RuleType.NUMBER -> "Example: +86*, 10010, 555"
                                 RuleType.COUNTRY -> "Start typing country"
                             }
@@ -3346,24 +3362,33 @@ private fun RuleEditorDialog(
 
 @Composable
 private fun SegmentedRuleType(selected: RuleType, onSelected: (RuleType) -> Unit) {
-    val values = listOf(RuleType.KEYWORD, RuleType.NUMBER, RuleType.COUNTRY)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        values.forEach { value ->
-            val active = value == selected
-            Surface(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .clickable { onSelected(value) },
-                color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHighest,
-                shape = RoundedCornerShape(999.dp),
-                border = if (active) null else ButtonDefaults.outlinedButtonBorder
-            ) {
-                Text(
-                    text = value.name.lowercase().replaceFirstChar { it.uppercase() },
-                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                )
+    val values = listOf(RuleType.KEYWORD, RuleType.SENDER, RuleType.NUMBER, RuleType.COUNTRY)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        values.chunked(2).forEach { rowValues ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowValues.forEach { value ->
+                    val active = value == selected
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { onSelected(value) },
+                        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                        shape = RoundedCornerShape(999.dp),
+                        border = if (active) null else ButtonDefaults.outlinedButtonBorder
+                    ) {
+                        Text(
+                            text = value.name.lowercase().replaceFirstChar { it.uppercase() },
+                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+                if (rowValues.size == 1) {
+                    Spacer(Modifier.weight(1f))
+                }
             }
         }
     }

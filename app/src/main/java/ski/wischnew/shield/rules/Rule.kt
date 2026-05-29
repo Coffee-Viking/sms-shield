@@ -4,6 +4,7 @@ import java.util.UUID
 
 enum class RuleType {
     KEYWORD,
+    SENDER,
     NUMBER,
     COUNTRY
 }

@@ -86,6 +86,7 @@ class RuleStore(context: Context) {
         if (first.type != second.type) return false
         return when (first.type) {
             RuleType.KEYWORD -> normalizeText(first.pattern) == normalizeText(second.pattern)
+            RuleType.SENDER -> normalizeText(first.pattern) == normalizeText(second.pattern)
             RuleType.NUMBER -> normalizeNumberPattern(first.pattern) == normalizeNumberPattern(second.pattern)
             RuleType.COUNTRY -> first.pattern.trim().uppercase(Locale.ROOT) == second.pattern.trim().uppercase(Locale.ROOT)
         }

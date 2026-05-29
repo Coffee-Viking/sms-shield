@@ -9,9 +9,9 @@ RepoType: git
 Repo: https://github.com/Coffee-Viking/sms-shield.git
 
 Builds:
-  - versionName: '1.38'
-    versionCode: 138
-    commit: v1.38
+  - versionName: '1.39'
+    versionCode: 139
+    commit: v1.39
     subdir: app
     gradle:
       - release
@@ -19,5 +19,5 @@ Builds:
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9.]+$
 UpdateCheckData: app/build.gradle.kts|val appVersionCode = (\d+)|.|val appVersionName = "([^"]+)"
-CurrentVersion: '1.38'
-CurrentVersionCode: 138
+CurrentVersion: '1.39'
+CurrentVersionCode: 139

@@ -19,8 +19,10 @@ class FilterEngine {
 
     fun decide(sender: String?, body: String, rules: List<Rule>, defaultRegion: String): Decision {
         val normalizedBody = normalizeText(body)
-        val senderDigits = normalizeDigits(sender.orEmpty())
-        val senderCountry = getCountryIso(sender, defaultRegion)
+        val senderAddress = senderAddress(sender)
+        val normalizedSender = normalizeText(senderAddress)
+        val senderDigits = normalizeDigits(senderAddress)
+        val senderCountry = getCountryIso(senderAddress, defaultRegion)
 
         val enabledRules = rules.filter { it.enabled }
         val allowMatched = enabledRules
@@ -28,6 +30,7 @@ class FilterEngine {
             .any { rule ->
                 when (rule.type) {
                     RuleType.KEYWORD -> wildcardContains(normalizedBody, normalizeText(rule.pattern))
+                    RuleType.SENDER -> wildcardExact(normalizedSender, normalizeText(rule.pattern))
                     RuleType.NUMBER -> {
                         val patternDigits = normalizeDigits(rule.pattern)
                         if (rule.partialNumber) senderDigits.contains(patternDigits) else wildcardExact(senderDigits, patternDigits)
@@ -42,6 +45,7 @@ class FilterEngine {
             .any { rule ->
                 when (rule.type) {
                 RuleType.KEYWORD -> wildcardContains(normalizedBody, normalizeText(rule.pattern))
+                RuleType.SENDER -> wildcardExact(normalizedSender, normalizeText(rule.pattern))
                 RuleType.NUMBER -> {
                     val patternDigits = normalizeDigits(rule.pattern)
                     if (rule.partialNumber) {
@@ -58,6 +62,9 @@ class FilterEngine {
 
     private fun normalizeText(input: String): String =
         Normalizer.normalize(input, Normalizer.Form.NFKC).lowercase(Locale.ROOT)
+
+    private fun senderAddress(sender: String?): String =
+        sender.orEmpty().removePrefix("To:").trim()
 
     private fun normalizeDigits(number: String): String = number.filter { it.isDigit() || it == '+' }
 
