@@ -2758,22 +2758,37 @@ private fun MessageDetailView(
                     if (addedNotice != null) {
                         Text(addedNotice.orEmpty(), color = MaterialTheme.colorScheme.primary)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = onReply, shape = RoundedCornerShape(14.dp)) {
-                            Text("Reply")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onReply,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                        ) {
+                            Text("Reply", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Button(onClick = onForward, shape = RoundedCornerShape(14.dp)) {
-                            Text("Forward")
+                        Button(
+                            onClick = onForward,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+                        ) {
+                            Text("Forward", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { showDeleteConfirm = true },
+                            modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
                                 contentColor = MaterialTheme.colorScheme.error
                             )
                         ) {
-                            Text("Delete")
+                            Text("Delete", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (!message.archived) {
