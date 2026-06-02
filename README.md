@@ -39,12 +39,32 @@ Step-by-step:
 
 - Open the Google Play Store app.
 - Tap the profile icon in the top right corner.
-- Tap "Play Protect".
+- Scroll to "Play Protect" and tap.
 - Tap the settings icon in the top right corner.
 - Deactivate "Scan apps with Play Protect".
 - When asked to confirm, select "Pause".
 
 Afterwards, SMS Shield should install normally and you can reactivate Play Protect.
+
+Subsequent updates will install without disabling Play Protect, but you may need
+to approve the installation with your fingerprint or system PIN: In the installation 
+dialogue, select "more details -> install anyway".
+
+When opening the app for the first time, Android 13 and newer may refuse SMS-related
+access at this point due to the use of functions with elevated access (reading SMS), and
+subsequently fail to set as default SMS app, which is however needed to access the message
+storage.
+
+To manually set SMS Shield as the default SMS app:
+
+- Navigate to Settings -> Apps -> App management.
+- Find SMS Shield.
+- Tap the three-dot menu in the top right corner and activate "Allow restricted settings".
+- Go to Settings -> Default apps -> SMS app.
+- Select SMS Shield.
+
+Both aspects will be resolved once this app gets listed in app stores, this issue only
+exists temporarily while sideloading from GitHub or other archives.
 
 ## License
 

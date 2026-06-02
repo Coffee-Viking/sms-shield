@@ -103,9 +103,13 @@ class InboxStore(private val context: Context) {
     fun updateArchivedState(id: Long, archived: Boolean): Boolean {
         var changed = false
         val updated = listMessages().map { message ->
-            if (message.id == id && message.archived != archived) {
+            val autoArchiveFrozen = if (archived) false else message.autoArchiveFrozen
+            if (message.id == id && (message.archived != archived || message.autoArchiveFrozen != autoArchiveFrozen)) {
                 changed = true
-                message.copy(archived = archived)
+                message.copy(
+                    archived = archived,
+                    autoArchiveFrozen = autoArchiveFrozen
+                )
             } else {
                 message
             }
@@ -118,9 +122,13 @@ class InboxStore(private val context: Context) {
         if (ids.isEmpty()) return 0
         var changed = 0
         val updated = listMessages().map { message ->
-            if (message.id in ids && message.archived != archived) {
+            val autoArchiveFrozen = if (archived) false else message.autoArchiveFrozen
+            if (message.id in ids && (message.archived != archived || message.autoArchiveFrozen != autoArchiveFrozen)) {
                 changed++
-                message.copy(archived = archived)
+                message.copy(
+                    archived = archived,
+                    autoArchiveFrozen = autoArchiveFrozen
+                )
             } else {
                 message
             }

@@ -748,7 +748,32 @@ private fun SmsShieldApp(
         selectedMessage?.let { message ->
             inboxStore.returnMessagesToInbox(
                 ids = setOf(message.id),
-                freezeAutoArchived = autoArchiveDays != null
+                freezeAutoArchived = true
+            )
+            selectedMessage = null
+            selectedConversationKey = null
+            restoreSearchAfterDetail = false
+            screen = Screen.MAIN
+            inboxVersion++
+        }
+    }
+    val archiveSelectedConversation: () -> Unit = {
+        val ids = selectedConversation?.ids ?: emptySet()
+        if (ids.isNotEmpty()) {
+            inboxStore.updateArchivedState(ids, true)
+            selectedMessage = null
+            selectedConversationKey = null
+            restoreSearchAfterDetail = false
+            screen = Screen.MAIN
+            inboxVersion++
+        }
+    }
+    val returnSelectedConversationToInbox: () -> Unit = {
+        val ids = selectedConversation?.ids ?: emptySet()
+        if (ids.isNotEmpty()) {
+            inboxStore.returnMessagesToInbox(
+                ids = ids,
+                freezeAutoArchived = true
             )
             selectedMessage = null
             selectedConversationKey = null
@@ -1067,6 +1092,7 @@ private fun SmsShieldApp(
                                     }
                                 },
                                 onArchive = archiveSelectedMessage,
+                                onArchiveThread = archiveSelectedConversation,
                                 onReturnToInbox = returnSelectedMessageToInbox,
                                 onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
@@ -1156,6 +1182,7 @@ private fun SmsShieldApp(
                                     }
                                 },
                                 onArchive = archiveSelectedMessage,
+                                onArchiveThread = archiveSelectedConversation,
                                 onReturnToInbox = returnSelectedMessageToInbox,
                                 onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
@@ -1208,6 +1235,7 @@ private fun SmsShieldApp(
                                 },
                                 onArchive = archiveSelectedMessage,
                                 onReturnToInbox = returnSelectedMessageToInbox,
+                                onReturnThreadToInbox = returnSelectedConversationToInbox,
                                 onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
                             )
@@ -3238,7 +3266,9 @@ private fun MessageDetailView(
     onForward: () -> Unit,
     onDelete: () -> Unit,
     onArchive: () -> Unit,
+    onArchiveThread: (() -> Unit)? = null,
     onReturnToInbox: () -> Unit,
+    onReturnThreadToInbox: (() -> Unit)? = null,
     onReviewRules: () -> Unit = {},
     onAddRule: (RuleAction, RuleType, String, String) -> Unit
 ) {
@@ -3247,7 +3277,9 @@ private fun MessageDetailView(
     val simDetail = remember(message, activeSims) { messageSimDetail(message, activeSims) }
     var showDeleteConfirm by remember(message.id) { mutableStateOf(false) }
     var showArchiveConfirm by remember(message.id) { mutableStateOf(false) }
+    var showArchiveThreadConfirm by remember(message.id) { mutableStateOf(false) }
     var showBlockedReturnConfirm by remember(message.id) { mutableStateOf(false) }
+    var showArchivedThreadReturnConfirm by remember(message.id) { mutableStateOf(false) }
     var bodyValue by remember(message.id) { mutableStateOf(TextFieldValue(message.body)) }
     var addedNotice by remember(message.id) { mutableStateOf<String?>(null) }
     val clipboardManager = LocalClipboardManager.current
@@ -3479,7 +3511,9 @@ private fun MessageDetailView(
                     } else if (!message.archived) {
                         Button(
                             onClick = {
-                                if (message.autoArchiveFrozen) {
+                                if (threadMessages.size > 1 && onArchiveThread != null) {
+                                    showArchiveThreadConfirm = true
+                                } else if (message.autoArchiveFrozen) {
                                     showArchiveConfirm = true
                                 } else {
                                     onArchive()
@@ -3492,7 +3526,13 @@ private fun MessageDetailView(
                         }
                     } else {
                         Button(
-                            onClick = onReturnToInbox,
+                            onClick = {
+                                if (threadMessages.size > 1 && onReturnThreadToInbox != null) {
+                                    showArchivedThreadReturnConfirm = true
+                                } else {
+                                    onReturnToInbox()
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(14.dp)
                         ) {
@@ -3550,6 +3590,80 @@ private fun MessageDetailView(
             dismissButton = {
                 TextButton(onClick = { showArchiveConfirm = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showArchiveThreadConfirm) {
+        AlertDialog(
+            onDismissRequest = { showArchiveThreadConfirm = false },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Archive chat?") },
+            text = { Text("Archive only this message, or archive the whole chat?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showArchiveThreadConfirm = false
+                        onArchiveThread?.invoke()
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Whole Chat")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            showArchiveThreadConfirm = false
+                            if (message.autoArchiveFrozen) {
+                                showArchiveConfirm = true
+                            } else {
+                                onArchive()
+                            }
+                        }
+                    ) {
+                        Text("This Message")
+                    }
+                    TextButton(onClick = { showArchiveThreadConfirm = false }) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
+    }
+
+    if (showArchivedThreadReturnConfirm) {
+        AlertDialog(
+            onDismissRequest = { showArchivedThreadReturnConfirm = false },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Return archived chat to inbox?") },
+            text = { Text("Return only this message, or return the whole chat? Returned message will be marked as \"skip archiving\".") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showArchivedThreadReturnConfirm = false
+                        onReturnThreadToInbox?.invoke()
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Whole Chat")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            showArchivedThreadReturnConfirm = false
+                            onReturnToInbox()
+                        }
+                    ) {
+                        Text("This Message")
+                    }
+                    TextButton(onClick = { showArchivedThreadReturnConfirm = false }) {
+                        Text("Cancel")
+                    }
                 }
             }
         )
