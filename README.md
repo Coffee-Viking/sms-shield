@@ -7,9 +7,12 @@ It can be used as the default SMS app and supports:
 - Keyword, sender, number, wildcard, and country-based block and allow rules
 - Unicode message text, including non-ASCII SMS content
 - Blocked message suppression and a dedicated blocked folder
-- Archive and skip-archive (freeze to inbox) controls
-- Dual-SIM send options and SIM indicators (including old SIM/eSIM)
-- OTP copy support from notification & from message
+- Manual block overrides for false positives
+- Message and archive filters for all, received, and sent SMS
+- Archive and skip-archive controls
+- Chat grouping with optional split-by-inactivity behavior
+- Dual-SIM send options and SIM indicators, including old SIM/eSIM labels
+- OTP copy support from notifications and message view
 - Local import and export of app data via JSON file
 - Light, dark, and AMOLED themes with selectable accent colors
 
@@ -28,20 +31,20 @@ Do not commit release keys or generated APKs.
 
 ## Installation
 
-As long as the app is not listed in any major app store (work in progress), you may
-run into warning messages while installing. As a current workaround when installing
-from the release .apk, you need to pause Google Play Protect.
+As long as the app is not listed in any major app store, you may run into warning
+messages while installing. When installing from the release APK, you may need to
+pause Google Play Protect temporarily.
 
-Step-by-Step:
+Step-by-step:
 
 - Open the Google Play Store app.
-- Tap on the profile icon in the top right corner
-- Tap on the "Play Protect" button
-- Click the settings (cog) icon in the top right corner
-- Deactivate the setting "Scan Apps with Play Protect"
-- When asked to confirm, select "Pause"
+- Tap the profile icon in the top right corner.
+- Tap "Play Protect".
+- Tap the settings icon in the top right corner.
+- Deactivate "Scan apps with Play Protect".
+- When asked to confirm, select "Pause".
 
-Afterwards, SMS Shield will install fine and you can reactivate Play Protect.
+Afterwards, SMS Shield should install normally and you can reactivate Play Protect.
 
 ## License
 

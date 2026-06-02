@@ -13,5 +13,6 @@ data class SmsMessageRecord(
     val simSlotIndex: Int? = null,
     val simDisplayName: String? = null,
     val simCarrierName: String? = null,
-    val autoArchiveFrozen: Boolean = false
+    val autoArchiveFrozen: Boolean = false,
+    val blockOverride: Boolean = false
 )

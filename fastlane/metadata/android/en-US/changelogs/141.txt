@@ -1,0 +1,6 @@
+Improved block and allow list confirmations.
+Updated message date labels and blocked search.
+Added archive chat grouping and list fast scrolling.
+Renamed the main view to Messages and added sent/received filters.
+Refined auto-archive returns, outgoing rule handling, and OTP detection.
+Refined theme-aware navigation and filter styling.

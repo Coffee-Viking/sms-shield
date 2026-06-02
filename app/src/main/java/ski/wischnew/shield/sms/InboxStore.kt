@@ -40,7 +40,8 @@ class InboxStore(private val context: Context) {
                         simSlotIndex = obj.optNullableInt("simSlotIndex"),
                         simDisplayName = obj.optString("simDisplayName", "").takeIf { it.isNotBlank() },
                         simCarrierName = obj.optString("simCarrierName", "").takeIf { it.isNotBlank() },
-                        autoArchiveFrozen = obj.optBoolean("autoArchiveFrozen", false)
+                        autoArchiveFrozen = obj.optBoolean("autoArchiveFrozen", false),
+                        blockOverride = obj.optBoolean("blockOverride", false)
                     )
                 )
             }
@@ -88,7 +89,7 @@ class InboxStore(private val context: Context) {
     fun updateBlockedState(id: Long, blocked: Boolean): Boolean {
         var changed = false
         val updated = listMessages().map { message ->
-            if (message.id == id && (message.blocked != blocked || message.archived)) {
+            if (message.id == id && !message.outgoing && (message.blocked != blocked || message.archived)) {
                 changed = true
                 message.copy(blocked = blocked, archived = false)
             } else {
@@ -143,13 +144,32 @@ class InboxStore(private val context: Context) {
         return changed
     }
 
-    fun returnMessagesToInbox(ids: Set<Long>): Int {
+    fun restoreMessageState(restoredMessage: SmsMessageRecord): Boolean {
+        var changed = false
+        val updated = listMessages().map { message ->
+            if (message.id == restoredMessage.id) {
+                changed = true
+                restoredMessage
+            } else {
+                message
+            }
+        }
+        if (changed) saveMessages(updated)
+        return changed
+    }
+
+    fun returnMessagesToInbox(ids: Set<Long>, freezeAutoArchived: Boolean = false): Int {
         if (ids.isEmpty()) return 0
         var changed = 0
         val updated = listMessages().map { message ->
             if (message.id in ids && (message.blocked || message.archived)) {
                 changed++
-                message.copy(blocked = false, archived = false)
+                message.copy(
+                    blocked = false,
+                    archived = false,
+                    autoArchiveFrozen = message.autoArchiveFrozen || (freezeAutoArchived && message.archived) || message.blocked,
+                    blockOverride = message.blockOverride || message.blocked
+                )
             } else {
                 message
             }
@@ -176,18 +196,31 @@ class InboxStore(private val context: Context) {
         val engine = FilterEngine()
         var changed = 0
         val updated = listMessages().map { message ->
-            val shouldBlock = engine.shouldBlock(
-                sender = message.sender,
-                body = message.body,
-                rules = rules,
-                defaultRegion = defaultRegion
-            )
-            val shouldArchive = if (shouldBlock) false else message.archived
-            if (message.blocked != shouldBlock || message.archived != shouldArchive) {
-                changed++
-                message.copy(blocked = shouldBlock, archived = shouldArchive)
+            if (message.outgoing) {
+                if (message.blocked) {
+                    changed++
+                    message.copy(blocked = false, archived = false, blockOverride = false)
+                } else {
+                    message
+                }
             } else {
-                message
+                val shouldBlock = engine.shouldBlock(
+                    sender = message.sender,
+                    body = message.body,
+                    rules = rules,
+                    defaultRegion = defaultRegion
+                )
+                val shouldArchive = if (shouldBlock) false else message.archived
+                if (message.blocked != shouldBlock || message.archived != shouldArchive) {
+                    changed++
+                    message.copy(
+                        blocked = shouldBlock,
+                        archived = shouldArchive,
+                        blockOverride = if (shouldBlock) false else message.blockOverride
+                    )
+                } else {
+                    message
+                }
             }
         }
         if (changed > 0) saveMessages(updated)
@@ -211,7 +244,7 @@ class InboxStore(private val context: Context) {
                     message
                 } else {
                     moved++
-                    message.copy(blocked = false, archived = false)
+                    message.copy(blocked = false, archived = false, blockOverride = false)
                 }
             }
         }
@@ -428,6 +461,7 @@ class InboxStore(private val context: Context) {
             .put("simDisplayName", simDisplayName.orEmpty())
             .put("simCarrierName", simCarrierName.orEmpty())
             .put("autoArchiveFrozen", autoArchiveFrozen)
+            .put("blockOverride", blockOverride)
     }
 
     private fun SmsMessageRecord.isLikelyDuplicateOf(other: SmsMessageRecord): Boolean {
@@ -464,7 +498,8 @@ class InboxStore(private val context: Context) {
                 simSlotIndex = obj.optNullableInt("simSlotIndex"),
                 simDisplayName = obj.optString("simDisplayName", "").takeIf { it.isNotBlank() },
                 simCarrierName = obj.optString("simCarrierName", "").takeIf { it.isNotBlank() },
-                autoArchiveFrozen = obj.optBoolean("autoArchiveFrozen", false)
+                autoArchiveFrozen = obj.optBoolean("autoArchiveFrozen", false),
+                blockOverride = obj.optBoolean("blockOverride", false)
             )
         }
     }

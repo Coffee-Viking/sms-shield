@@ -29,14 +29,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,6 +51,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -70,6 +76,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -93,12 +100,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import ski.wischnew.shield.contacts.ContactDisplay
 import ski.wischnew.shield.contacts.ContactLookup
 import ski.wischnew.shield.rules.FilterEngine
@@ -129,6 +138,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private var requestedMessageId by mutableStateOf<Long?>(null)
@@ -302,7 +312,7 @@ private enum class Screen {
 }
 
 private fun Screen.supportsSearch(): Boolean {
-    return this == Screen.MAIN || this == Screen.ARCHIVE
+    return this == Screen.MAIN || this == Screen.BLOCKED || this == Screen.ARCHIVE
 }
 
 private enum class BulkMessageAction {
@@ -310,6 +320,20 @@ private enum class BulkMessageAction {
     FREEZE,
     RETURN_TO_INBOX,
     DELETE
+}
+
+private enum class MessageDirectionFilter(val label: String) {
+    ALL("All"),
+    RECEIVED("Received"),
+    SENT("Sent");
+
+    fun matches(message: SmsMessageRecord): Boolean {
+        return when (this) {
+            ALL -> true
+            RECEIVED -> !message.outgoing
+            SENT -> message.outgoing
+        }
+    }
 }
 
 private data class CountryOption(val code: String, val name: String, val callingCode: String)
@@ -346,7 +370,13 @@ private data class RuleConflict(
 
 private data class PendingMessageRuleConflict(
     val proposed: Rule,
-    val existing: Rule
+    val existing: Rule,
+    val successNotice: String
+)
+
+private data class PendingRuleConfirmation(
+    val message: String,
+    val onUndo: () -> Unit
 )
 
 private data class PendingEditorRuleConflict(
@@ -445,7 +475,10 @@ private fun SmsShieldApp(
     var selectedConversationKey by remember { mutableStateOf<String?>(null) }
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var messagesDirectionFilter by remember { mutableStateOf(MessageDirectionFilter.ALL) }
+    var archiveDirectionFilter by remember { mutableStateOf(MessageDirectionFilter.ALL) }
     var restoreSearchAfterDetail by remember { mutableStateOf(false) }
+    var scrollInboxToTopAfterDetail by remember { mutableStateOf(false) }
     var pendingRetroactiveBlockRule by remember { mutableStateOf<Rule?>(null) }
     var messages by remember { mutableStateOf<List<SmsMessageRecord>>(emptyList()) }
     var messagesLoaded by remember { mutableStateOf(false) }
@@ -456,6 +489,7 @@ private fun SmsShieldApp(
     var blockedAutoDeleteCandidateCount by remember { mutableIntStateOf(0) }
     var blockedAutoDeletePromptShown by remember { mutableStateOf(false) }
     var pendingMessageRuleConflict by remember { mutableStateOf<PendingMessageRuleConflict?>(null) }
+    var pendingRuleConfirmation by remember { mutableStateOf<PendingRuleConfirmation?>(null) }
     var backupSelection by remember { mutableStateOf(BackupSelection()) }
     var backupNotice by remember { mutableStateOf<String?>(null) }
     var backupDialogNotice by remember { mutableStateOf<String?>(null) }
@@ -488,9 +522,13 @@ private fun SmsShieldApp(
     val selectedMessageTitle = remember(selectedMessage?.id, selectedMessage?.sender, contactsGranted) {
         selectedMessage?.let { ContactLookup.resolveSender(context, it.sender).primary }
     }
-    val selectedConversation = remember(selectedConversationKey, messages, chatModeEnabled, conversationSplitHours, contactsGranted) {
+    val selectedConversation = remember(selectedConversationKey, messages, screen, chatModeEnabled, conversationSplitHours, contactsGranted) {
         selectedConversationKey?.let { key ->
-            conversationThreads(context, messages.filter { !it.blocked && !it.archived }, chatModeEnabled, conversationSplitHours)
+            val threadMessages = when (screen) {
+                Screen.ARCHIVE -> messages.filter { it.archived }
+                else -> messages.filter { !it.blocked && !it.archived }
+            }
+            conversationThreads(context, threadMessages, chatModeEnabled, conversationSplitHours)
                 .firstOrNull { it.key == key }
         }
     }
@@ -507,6 +545,19 @@ private fun SmsShieldApp(
         muted = MaterialTheme.colorScheme.onSurfaceVariant,
         divider = MaterialTheme.colorScheme.outlineVariant
     )
+    val defaultRegion = Locale.getDefault().country.ifBlank { "US" }
+    val restoreMessageState: (SmsMessageRecord?, Screen) -> Unit = { beforeMessage, beforeScreen ->
+        beforeMessage?.let { message ->
+            inboxStore.restoreMessageState(message)
+            selectedMessage = message
+            selectedConversationKey = null
+            screen = beforeScreen
+        }
+        inboxVersion++
+    }
+    val confirmRuleAdded: (String, () -> Unit) -> Unit = { notice, undo ->
+        pendingRuleConfirmation = PendingRuleConfirmation(notice, undo)
+    }
     val inboxListState = rememberLazyListState()
     val blockedListState = rememberLazyListState()
     val archiveListState = rememberLazyListState()
@@ -628,6 +679,10 @@ private fun SmsShieldApp(
     val closeMessageDetail: () -> Unit = {
         selectedMessage = null
         selectedConversationKey = null
+        if (scrollInboxToTopAfterDetail) {
+            scrollInboxToTopAfterDetail = false
+            scope.launch { inboxListState.scrollToItem(0) }
+        }
         if (restoreSearchAfterDetail && screen.supportsSearch()) {
             searchActive = true
         }
@@ -636,18 +691,27 @@ private fun SmsShieldApp(
     val applyRuleToSelectedMessage: (Rule) -> Unit = { rule ->
         selectedMessage?.let { message ->
             val blocked = rule.action == RuleAction.BLOCK
+            val canBlockMessage = !message.outgoing || !blocked
             inboxStore.updateBlockedState(message.id, blocked)
-            selectedMessage = message.copy(blocked = blocked, archived = false)
+            selectedMessage = if (canBlockMessage) {
+                message.copy(blocked = blocked, archived = false)
+            } else {
+                message
+            }
             selectedConversationKey = null
             restoreSearchAfterDetail = false
-            screen = if (blocked) Screen.BLOCKED else Screen.MAIN
+            if (!blocked) {
+                screen = Screen.MAIN
+            }
             inboxVersion++
             if (blocked) {
                 pendingRetroactiveBlockRule = rule
             }
         }
     }
-    val addRuleFromMessage: (RuleAction, RuleType, String) -> Unit = { action, type, text ->
+    val addRuleFromMessage: (RuleAction, RuleType, String, String) -> Unit = { action, type, text, successNotice ->
+        val beforeMessage = selectedMessage
+        val beforeScreen = screen
         val rule = Rule(
             type = type,
             pattern = text,
@@ -657,10 +721,16 @@ private fun SmsShieldApp(
         val conflict = ruleStore.findConflict(rule)
         when {
             duplicate != null -> applyRuleToSelectedMessage(duplicate)
-            conflict != null -> pendingMessageRuleConflict = PendingMessageRuleConflict(rule, conflict)
+            conflict != null -> pendingMessageRuleConflict = PendingMessageRuleConflict(rule, conflict, successNotice)
             else -> {
                 ruleStore.addRule(rule)
                 applyRuleToSelectedMessage(rule)
+                confirmRuleAdded(successNotice) {
+                    pendingRetroactiveBlockRule = null
+                    ruleStore.deleteRule(rule.id)
+                    inboxStore.applyRulesToMessages(ruleStore.getRules(), defaultRegion)
+                    restoreMessageState(beforeMessage, beforeScreen)
+                }
             }
         }
     }
@@ -676,7 +746,10 @@ private fun SmsShieldApp(
     }
     val returnSelectedMessageToInbox: () -> Unit = {
         selectedMessage?.let { message ->
-            inboxStore.returnMessagesToInbox(setOf(message.id))
+            inboxStore.returnMessagesToInbox(
+                ids = setOf(message.id),
+                freezeAutoArchived = autoArchiveDays != null
+            )
             selectedMessage = null
             selectedConversationKey = null
             restoreSearchAfterDetail = false
@@ -693,7 +766,10 @@ private fun SmsShieldApp(
         inboxVersion++
     }
     val returnMessagesToInbox: (Set<Long>) -> Unit = { ids ->
-        inboxStore.returnMessagesToInbox(ids)
+        inboxStore.returnMessagesToInbox(
+            ids = ids,
+            freezeAutoArchived = autoArchiveDays != null
+        )
         inboxVersion++
     }
     val deleteMessages: (Set<Long>) -> Unit = { ids ->
@@ -701,7 +777,7 @@ private fun SmsShieldApp(
         inboxVersion++
     }
     val blockRulesForMessage: (SmsMessageRecord) -> List<Rule> = { message ->
-        if (!message.blocked) {
+        if (!message.blocked && !message.blockOverride) {
             emptyList()
         } else {
             FilterEngine().matchingRules(
@@ -712,6 +788,15 @@ private fun SmsShieldApp(
                 action = RuleAction.BLOCK
             )
         }
+    }
+    val openBlockAllowList: () -> Unit = {
+        selectedMessage = null
+        selectedConversationKey = null
+        restoreSearchAfterDetail = false
+        searchActive = false
+        searchQuery = ""
+        mainSelectionActive = false
+        screen = Screen.BLOCK_ALLOW
     }
     val handleBackNavigation: () -> Unit = {
         when {
@@ -755,6 +840,7 @@ private fun SmsShieldApp(
             searchActive = false
             searchQuery = ""
             restoreSearchAfterDetail = false
+            scrollInboxToTopAfterDetail = true
             mainSelectionActive = false
             if (drawerState.isOpen) {
                 drawerState.close()
@@ -849,7 +935,7 @@ private fun SmsShieldApp(
                 DrawerHeader {
                     scope.launch { drawerState.close() }
                 }
-                DrawerItem("Inbox", selected = screen == Screen.MAIN) {
+                DrawerItem("Messages", selected = screen == Screen.MAIN, colors = colors, accentColor = accentColor) {
                     screen = Screen.MAIN
                     selectedMessage = null
                     selectedConversationKey = null
@@ -857,7 +943,7 @@ private fun SmsShieldApp(
                     mainSelectionActive = false
                     scope.launch { drawerState.close() }
                 }
-                DrawerItem("Blocked Messages", selected = screen == Screen.BLOCKED) {
+                DrawerItem("Blocked Messages", selected = screen == Screen.BLOCKED, colors = colors, accentColor = accentColor) {
                     screen = Screen.BLOCKED
                     selectedMessage = null
                     selectedConversationKey = null
@@ -867,7 +953,7 @@ private fun SmsShieldApp(
                     searchQuery = ""
                     scope.launch { drawerState.close() }
                 }
-                DrawerItem("Archive", selected = screen == Screen.ARCHIVE) {
+                DrawerItem("Archive", selected = screen == Screen.ARCHIVE, colors = colors, accentColor = accentColor) {
                     screen = Screen.ARCHIVE
                     selectedMessage = null
                     selectedConversationKey = null
@@ -877,7 +963,7 @@ private fun SmsShieldApp(
                     searchQuery = ""
                     scope.launch { drawerState.close() }
                 }
-                DrawerItem("Block & Allow List", selected = screen == Screen.BLOCK_ALLOW) {
+                DrawerItem("Block & Allow List", selected = screen == Screen.BLOCK_ALLOW, colors = colors, accentColor = accentColor) {
                     screen = Screen.BLOCK_ALLOW
                     selectedMessage = null
                     selectedConversationKey = null
@@ -887,7 +973,7 @@ private fun SmsShieldApp(
                     searchQuery = ""
                     scope.launch { drawerState.close() }
                 }
-                DrawerItem("Settings", selected = screen == Screen.SETTINGS) {
+                DrawerItem("Settings", selected = screen == Screen.SETTINGS, colors = colors, accentColor = accentColor) {
                     screen = Screen.SETTINGS
                     selectedMessage = null
                     selectedConversationKey = null
@@ -926,7 +1012,7 @@ private fun SmsShieldApp(
                         Screen.MAIN -> when {
                             selectedConversation != null -> selectedConversationTitle ?: "Conversation"
                             selectedMessage != null -> selectedMessageTitle ?: "Message"
-                            else -> "Inbox"
+                            else -> "Messages"
                         }
                         Screen.BLOCKED -> if (selectedMessage == null) "Blocked Messages" else selectedMessageTitle ?: "Message"
                         Screen.ARCHIVE -> if (selectedMessage == null) "Archive" else selectedMessageTitle ?: "Message"
@@ -982,15 +1068,18 @@ private fun SmsShieldApp(
                                 },
                                 onArchive = archiveSelectedMessage,
                                 onReturnToInbox = returnSelectedMessageToInbox,
+                                onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
                             )
                         } else if (selectedMessage != null) {
                             MessageDetailView(
                                 message = selectedMessage!!,
+                                threadMessages = selectedConversation?.sortedMessages ?: emptyList(),
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -1012,6 +1101,7 @@ private fun SmsShieldApp(
                                 },
                                 onArchive = archiveSelectedMessage,
                                 onReturnToInbox = returnSelectedMessageToInbox,
+                                onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
                             )
                         } else {
@@ -1020,6 +1110,8 @@ private fun SmsShieldApp(
                                 loading = !messagesLoaded,
                                 colors = colors,
                                 searchQuery = searchQuery,
+                                directionFilter = messagesDirectionFilter,
+                                onDirectionFilterChange = { messagesDirectionFilter = it },
                                 accentColor = accentColor,
                                 activeSims = activeSims,
                                 chatModeEnabled = chatModeEnabled,
@@ -1038,10 +1130,12 @@ private fun SmsShieldApp(
                         if (selectedMessage != null) {
                             MessageDetailView(
                                 message = selectedMessage!!,
+                                threadMessages = selectedConversation?.sortedMessages ?: emptyList(),
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -1063,6 +1157,7 @@ private fun SmsShieldApp(
                                 },
                                 onArchive = archiveSelectedMessage,
                                 onReturnToInbox = returnSelectedMessageToInbox,
+                                onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
                             )
                         } else {
@@ -1072,9 +1167,12 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 accentColor = accentColor,
                                 activeSims = activeSims,
+                                use24HourTime = use24HourTime,
+                                searchQuery = searchQuery,
                                 listState = blockedListState,
                                 onReturnMessagesToInbox = returnMessagesToInbox,
                                 onDeleteMessages = deleteMessages,
+                                onReviewRules = openBlockAllowList,
                                 onMessageClick = openMessageDetail
                             )
                         }
@@ -1083,10 +1181,12 @@ private fun SmsShieldApp(
                         if (selectedMessage != null) {
                             MessageDetailView(
                                 message = selectedMessage!!,
+                                threadMessages = selectedConversation?.sortedMessages ?: emptyList(),
                                 colors = colors,
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
                                     composeInitialRecipient = selectedMessage?.sender.orEmpty().removePrefix("To: ").trim()
@@ -1108,6 +1208,7 @@ private fun SmsShieldApp(
                                 },
                                 onArchive = archiveSelectedMessage,
                                 onReturnToInbox = returnSelectedMessageToInbox,
+                                onReviewRules = openBlockAllowList,
                                 onAddRule = addRuleFromMessage
                             )
                         } else {
@@ -1117,10 +1218,16 @@ private fun SmsShieldApp(
                                 colors = colors,
                                 accentColor = accentColor,
                                 activeSims = activeSims,
+                                chatModeEnabled = chatModeEnabled,
+                                conversationSplitHours = conversationSplitHours,
+                                use24HourTime = use24HourTime,
                                 searchQuery = searchQuery,
+                                directionFilter = archiveDirectionFilter,
+                                onDirectionFilterChange = { archiveDirectionFilter = it },
                                 listState = archiveListState,
                                 onReturnMessagesToInbox = returnMessagesToInbox,
                                 onDeleteMessages = deleteMessages,
+                                onConversationClick = openConversationDetail,
                                 onMessageClick = openMessageDetail
                             )
                         }
@@ -1291,9 +1398,18 @@ private fun SmsShieldApp(
             confirmButton = {
                 Button(
                     onClick = {
+                        val beforeMessage = selectedMessage
+                        val beforeScreen = screen
                         ruleStore.deleteRule(conflict.existing.id)
                         ruleStore.addRuleIfMissing(conflict.proposed)
                         applyRuleToSelectedMessage(conflict.proposed)
+                        confirmRuleAdded(conflict.successNotice) {
+                            pendingRetroactiveBlockRule = null
+                            ruleStore.deleteRule(conflict.proposed.id)
+                            ruleStore.addRuleIfMissing(conflict.existing)
+                            inboxStore.applyRulesToMessages(ruleStore.getRules(), defaultRegion)
+                            restoreMessageState(beforeMessage, beforeScreen)
+                        }
                         pendingMessageRuleConflict = null
                     },
                     shape = RoundedCornerShape(14.dp)
@@ -1304,6 +1420,33 @@ private fun SmsShieldApp(
             dismissButton = {
                 TextButton(onClick = { pendingMessageRuleConflict = null }) {
                     Text("Keep Existing")
+                }
+            }
+        )
+    }
+
+    pendingRuleConfirmation?.let { confirmation ->
+        AlertDialog(
+            onDismissRequest = { pendingRuleConfirmation = null },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Rule Added") },
+            text = { Text(confirmation.message) },
+            confirmButton = {
+                Button(
+                    onClick = { pendingRuleConfirmation = null },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        confirmation.onUndo()
+                        pendingRuleConfirmation = null
+                    }
+                ) {
+                    Text("Undo")
                 }
             }
         )
@@ -1542,12 +1685,32 @@ private fun DrawerHeader(onClose: () -> Unit) {
 }
 
 @Composable
-private fun DrawerItem(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun DrawerItem(
+    label: String,
+    selected: Boolean,
+    colors: UiColors,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
     NavigationDrawerItem(
-        label = { Text(label) },
+        label = {
+            Text(
+                label,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
         selected = selected,
         onClick = onClick,
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp)
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = NavigationDrawerItemDefaults.colors(
+            selectedContainerColor = accentColor.copy(alpha = 0.18f),
+            selectedTextColor = accentColor,
+            unselectedContainerColor = Color.Transparent,
+            unselectedTextColor = colors.muted
+        )
     )
 }
 
@@ -1637,11 +1800,59 @@ private fun AppTopBar(
 }
 
 @Composable
+private fun MessageDirectionFilterBar(
+    selected: MessageDirectionFilter,
+    onSelectedChange: (MessageDirectionFilter) -> Unit,
+    colors: UiColors,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.panel)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        listOf(
+            MessageDirectionFilter.ALL,
+            MessageDirectionFilter.RECEIVED,
+            MessageDirectionFilter.SENT
+        ).forEach { filter ->
+            val isSelected = filter == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isSelected) accentColor.copy(alpha = 0.18f) else Color.Transparent)
+                    .clickable { onSelectedChange(filter) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    filter.label,
+                    color = if (isSelected) accentColor else colors.muted,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MainListView(
     messages: List<SmsMessageRecord>,
     loading: Boolean,
     colors: UiColors,
     searchQuery: String,
+    directionFilter: MessageDirectionFilter,
+    onDirectionFilterChange: (MessageDirectionFilter) -> Unit,
     accentColor: Color,
     activeSims: List<SimInfo>,
     chatModeEnabled: Boolean,
@@ -1661,15 +1872,21 @@ private fun MainListView(
     LaunchedEffect(selectedIds) {
         onSelectionActiveChange(selectedIds.isNotEmpty())
     }
+    LaunchedEffect(directionFilter) {
+        listState.scrollToItem(0)
+    }
     val inboxMessages = remember(messages) {
         messages.filter { !it.blocked && !it.archived }
     }
-    LaunchedEffect(inboxMessages) {
-        val availableIds = inboxMessages.map { it.id }.toSet()
+    val visibleInboxMessages = remember(inboxMessages, directionFilter) {
+        inboxMessages.filter { directionFilter.matches(it) }
+    }
+    LaunchedEffect(visibleInboxMessages) {
+        val availableIds = visibleInboxMessages.map { it.id }.toSet()
         selectedIds = selectedIds.filter { it in availableIds }.toSet()
     }
-    val conversations = remember(inboxMessages, chatModeEnabled, conversationSplitHours, contactsGranted) {
-        conversationThreads(context, inboxMessages, chatModeEnabled, conversationSplitHours)
+    val conversations = remember(visibleInboxMessages, chatModeEnabled, conversationSplitHours, contactsGranted) {
+        conversationThreads(context, visibleInboxMessages, chatModeEnabled, conversationSplitHours)
     }
     val filteredConversations = remember(conversations, searchQuery, contactsGranted, activeSims) {
         val query = searchQuery.trim()
@@ -1705,81 +1922,92 @@ private fun MainListView(
         return
     }
     if (inboxMessages.isEmpty()) {
-        EmptyState("No inbox messages", "Received and sent messages will appear here. Blocked and archived messages are available from the menu.", colors)
-        return
-    }
-    if (filteredConversations.isEmpty()) {
-        EmptyState("No matching messages", "Try another sender, keyword, or status.", colors)
+        EmptyState("No messages", "Received and sent messages will appear here. Blocked and archived messages are available from the menu.", colors)
         return
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = 14.dp,
-                top = 10.dp,
-                end = 14.dp,
-                bottom = if (selectedIds.isEmpty()) 10.dp else 104.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(filteredConversations, key = { it.key }) { conversation ->
-                val latest = conversation.latest
-                val threadIds = conversation.ids
-                val conversationSelected = threadIds.isNotEmpty() && selectedIds.containsAll(threadIds)
-                val senderDisplay = remember(conversation.key, latest.sender, contactsGranted) {
-                    conversationTitle(context, conversation)
-                }
-                MessageRow(
-                    sender = senderDisplay,
-                    body = latest.body,
-                    status = conversationStatus(conversation),
-                    timestamp = latest.timestamp,
-                    simLabel = conversationSecondaryLine(conversation, activeSims),
-                    blocked = latest.blocked,
-                    ageAccentWithTimestamp = true,
-                    sameDayShowsTime = true,
-                    use24HourTime = use24HourTime,
-                    selected = conversationSelected,
-                    colors = colors,
-                    onAvatarClick = {
-                        selectedIds = if (conversationSelected) {
-                            selectedIds - threadIds
-                        } else {
-                            selectedIds + threadIds
+    Column(modifier = Modifier.fillMaxSize()) {
+        MessageDirectionFilterBar(
+            selected = directionFilter,
+            onSelectedChange = onDirectionFilterChange,
+            colors = colors,
+            accentColor = accentColor,
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, end = 14.dp, bottom = 2.dp)
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (filteredConversations.isEmpty()) {
+                EmptyState("No matching messages", "Try another direction filter, sender, keyword, or status.", colors)
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 14.dp,
+                        top = 8.dp,
+                        end = 14.dp,
+                        bottom = if (selectedIds.isEmpty()) 10.dp else 104.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(filteredConversations, key = { it.key }) { conversation ->
+                        val latest = conversation.latest
+                        val threadIds = conversation.ids
+                        val conversationSelected = threadIds.isNotEmpty() && selectedIds.containsAll(threadIds)
+                        val senderDisplay = remember(conversation.key, latest.sender, contactsGranted) {
+                            conversationTitle(context, conversation)
                         }
-                    },
-                    onClick = {
-                        if (selectedIds.isEmpty()) {
-                            onConversationClick(conversation)
-                        } else {
-                            selectedIds = if (conversationSelected) {
-                                selectedIds - threadIds
-                            } else {
-                                selectedIds + threadIds
+                        MessageRow(
+                            sender = senderDisplay,
+                            body = latest.body,
+                            status = conversationStatus(conversation),
+                            timestamp = latest.timestamp,
+                            simLabel = conversationSecondaryLine(conversation, activeSims),
+                            blocked = latest.blocked,
+                            ageAccentWithTimestamp = true,
+                            sameDayShowsTime = true,
+                            use24HourTime = use24HourTime,
+                            selected = conversationSelected,
+                            colors = colors,
+                            onAvatarClick = {
+                                selectedIds = if (conversationSelected) {
+                                    selectedIds - threadIds
+                                } else {
+                                    selectedIds + threadIds
+                                }
+                            },
+                            onClick = {
+                                if (selectedIds.isEmpty()) {
+                                    onConversationClick(conversation)
+                                } else {
+                                    selectedIds = if (conversationSelected) {
+                                        selectedIds - threadIds
+                                    } else {
+                                        selectedIds + threadIds
+                                    }
+                                }
                             }
-                        }
+                        )
                     }
-                )
-            }
-        }
+                }
 
-        if (selectedIds.isNotEmpty()) {
-            SelectionActionOverlay(
-                selectedCount = selectedIds.size,
-                accentColor = accentColor,
-                allSelected = allVisibleSelected,
-                freezeActive = freezeActive,
-                onSelectAll = { selectedIds = if (allVisibleSelected) emptySet() else visibleIds },
-                onArchive = { pendingBulkAction = BulkMessageAction.ARCHIVE },
-                onFreezeToggle = {
-                    onSetMessagesFrozen(selectedIds, !freezeActive)
-                },
-                onDelete = { pendingBulkAction = BulkMessageAction.DELETE },
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
+                FastScrollBar(listState = listState, colors = colors, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp))
+
+                if (selectedIds.isNotEmpty()) {
+                    SelectionActionOverlay(
+                        selectedCount = selectedIds.size,
+                        accentColor = accentColor,
+                        allSelected = allVisibleSelected,
+                        freezeActive = freezeActive,
+                        onSelectAll = { selectedIds = if (allVisibleSelected) emptySet() else visibleIds },
+                        onArchive = { pendingBulkAction = BulkMessageAction.ARCHIVE },
+                        onFreezeToggle = {
+                            onSetMessagesFrozen(selectedIds, !freezeActive)
+                        },
+                        onDelete = { pendingBulkAction = BulkMessageAction.DELETE },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+            }
         }
     }
 
@@ -1852,9 +2080,12 @@ private fun BlockedMessagesView(
     colors: UiColors,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    use24HourTime: Boolean,
+    searchQuery: String,
     listState: LazyListState,
     onReturnMessagesToInbox: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
+    onReviewRules: () -> Unit,
     onMessageClick: (SmsMessageRecord) -> Unit
 ) {
     val blockedMessages = remember(messages) {
@@ -1870,10 +2101,16 @@ private fun BlockedMessagesView(
         colors = colors,
         accentColor = accentColor,
         activeSims = activeSims,
+        use24HourTime = use24HourTime,
+        searchQuery = searchQuery,
         listState = listState,
         showArchiveAgeDividers = false,
         statusForMessage = { "Blocked" },
         blockedForRow = { true },
+        returnWarningTitle = "Return blocked messages to inbox?",
+        returnWarningText = "Selected messages may still match active block rules. Return only these messages, or review the blocking rules?",
+        returnConfirmText = "Return Messages",
+        onReviewRules = onReviewRules,
         onReturnMessagesToInbox = onReturnMessagesToInbox,
         onDeleteMessages = onDeleteMessages,
         onMessageClick = onMessageClick
@@ -1887,34 +2124,282 @@ private fun ArchiveMessagesView(
     colors: UiColors,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    chatModeEnabled: Boolean,
+    conversationSplitHours: Int?,
+    use24HourTime: Boolean,
     searchQuery: String,
+    directionFilter: MessageDirectionFilter,
+    onDirectionFilterChange: (MessageDirectionFilter) -> Unit,
     listState: LazyListState,
     onReturnMessagesToInbox: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
+    onConversationClick: (ConversationThread) -> Unit,
     onMessageClick: (SmsMessageRecord) -> Unit
 ) {
     val archivedMessages = remember(messages) {
         messages.filter { it.archived }
     }
-    FolderMessageListView(
-        messages = archivedMessages,
-        loading = loading,
-        loadingTitle = "Loading archive",
-        loadingBody = "Preparing archived messages.",
-        emptyTitle = "No archived messages",
-        emptyBody = "Move messages here when you want them out of the inbox.",
-        colors = colors,
-        accentColor = accentColor,
-        activeSims = activeSims,
-        searchQuery = searchQuery,
-        listState = listState,
-        showArchiveAgeDividers = true,
-        statusForMessage = { messageStatus(it) },
-        blockedForRow = { it.blocked },
-        onReturnMessagesToInbox = onReturnMessagesToInbox,
-        onDeleteMessages = onDeleteMessages,
-        onMessageClick = onMessageClick
-    )
+    val visibleArchivedMessages = remember(archivedMessages, directionFilter) {
+        archivedMessages.filter { directionFilter.matches(it) }
+    }
+    LaunchedEffect(directionFilter) {
+        listState.scrollToItem(0)
+    }
+    if (loading) {
+        EmptyState("Loading archive", "Preparing archived messages.", colors)
+        return
+    }
+    if (archivedMessages.isEmpty()) {
+        EmptyState("No archived messages", "Move messages here when you want them out of the inbox.", colors)
+        return
+    }
+    Column(modifier = Modifier.fillMaxSize()) {
+        MessageDirectionFilterBar(
+            selected = directionFilter,
+            onSelectedChange = onDirectionFilterChange,
+            colors = colors,
+            accentColor = accentColor,
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, end = 14.dp, bottom = 2.dp)
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (chatModeEnabled) {
+                FolderConversationListView(
+                    messages = visibleArchivedMessages,
+                    loading = false,
+                    loadingTitle = "Loading archive",
+                    loadingBody = "Preparing archived messages.",
+                    emptyTitle = "No matching messages",
+                    emptyBody = "Try another direction filter, sender, keyword, or status.",
+                    colors = colors,
+                    accentColor = accentColor,
+                    activeSims = activeSims,
+                    searchQuery = searchQuery,
+                    listState = listState,
+                    showArchiveAgeDividers = true,
+                    conversationSplitHours = conversationSplitHours,
+                    use24HourTime = use24HourTime,
+                    onReturnMessagesToInbox = onReturnMessagesToInbox,
+                    onDeleteMessages = onDeleteMessages,
+                    onConversationClick = onConversationClick
+                )
+            } else {
+                FolderMessageListView(
+                    messages = visibleArchivedMessages,
+                    loading = false,
+                    loadingTitle = "Loading archive",
+                    loadingBody = "Preparing archived messages.",
+                    emptyTitle = "No matching messages",
+                    emptyBody = "Try another direction filter, sender, keyword, or status.",
+                    colors = colors,
+                    accentColor = accentColor,
+                    activeSims = activeSims,
+                    use24HourTime = use24HourTime,
+                    searchQuery = searchQuery,
+                    listState = listState,
+                    showArchiveAgeDividers = true,
+                    statusForMessage = { messageStatus(it) },
+                    blockedForRow = { it.blocked },
+                    onReturnMessagesToInbox = onReturnMessagesToInbox,
+                    onDeleteMessages = onDeleteMessages,
+                    onMessageClick = onMessageClick
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderConversationListView(
+    messages: List<SmsMessageRecord>,
+    loading: Boolean,
+    loadingTitle: String,
+    loadingBody: String,
+    emptyTitle: String,
+    emptyBody: String,
+    colors: UiColors,
+    accentColor: Color,
+    activeSims: List<SimInfo>,
+    searchQuery: String,
+    listState: LazyListState,
+    showArchiveAgeDividers: Boolean,
+    conversationSplitHours: Int?,
+    use24HourTime: Boolean,
+    onReturnMessagesToInbox: (Set<Long>) -> Unit,
+    onDeleteMessages: (Set<Long>) -> Unit,
+    onConversationClick: (ConversationThread) -> Unit
+) {
+    val context = LocalContext.current
+    val contactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var pendingBulkAction by remember { mutableStateOf<BulkMessageAction?>(null) }
+    val conversations = remember(messages, conversationSplitHours, contactsGranted) {
+        conversationThreads(context, messages, chatModeEnabled = true, splitAfterHours = conversationSplitHours)
+    }
+    val visibleConversations = remember(conversations, searchQuery, contactsGranted, activeSims) {
+        val query = searchQuery.trim()
+        if (query.isBlank()) {
+            conversations
+        } else {
+            conversations.filter { conversation ->
+                conversation.messages.any { message ->
+                    val status = messageStatus(message)
+                    val displaySender = conversationTitle(context, conversation)
+                    val simLabel = messageSimOverview(message, activeSims).orEmpty()
+                    message.sender.contains(query, ignoreCase = true) ||
+                        displaySender.contains(query, ignoreCase = true) ||
+                        message.body.contains(query, ignoreCase = true) ||
+                        status.contains(query, ignoreCase = true) ||
+                        simLabel.contains(query, ignoreCase = true)
+                }
+            }
+        }
+    }
+    val selectedMessages = remember(visibleConversations, selectedIds) {
+        visibleConversations.flatMap { it.messages }.filter { it.id in selectedIds }
+    }
+    val visibleIds = remember(visibleConversations) { visibleConversations.flatMap { it.messages }.map { it.id }.toSet() }
+    val allVisibleSelected = visibleIds.isNotEmpty() && selectedIds.containsAll(visibleIds)
+    LaunchedEffect(messages) {
+        val availableIds = messages.map { it.id }.toSet()
+        selectedIds = selectedIds.filter { it in availableIds }.toSet()
+    }
+    if (loading) {
+        EmptyState(loadingTitle, loadingBody, colors)
+        return
+    }
+    if (messages.isEmpty()) {
+        EmptyState(emptyTitle, emptyBody, colors)
+        return
+    }
+    if (visibleConversations.isEmpty()) {
+        EmptyState("No matching messages", "Try another sender, keyword, or status.", colors)
+        return
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 14.dp,
+                top = 10.dp,
+                end = 14.dp,
+                bottom = if (selectedIds.isEmpty()) 10.dp else 104.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            var lastArchiveBucket = 0
+            visibleConversations.forEach { conversation ->
+                val latest = conversation.latest
+                val archiveBucket = if (showArchiveAgeDividers) archiveAgeBucket(latest.timestamp) else 0
+                if (archiveBucket != 0 && archiveBucket != lastArchiveBucket) {
+                    item(key = "archive-conversation-divider-$archiveBucket-${conversation.key}") {
+                        ArchiveAgeDivider(archiveBucket, colors)
+                    }
+                }
+                lastArchiveBucket = archiveBucket
+                item(key = conversation.key) {
+                    val threadIds = conversation.ids
+                    val conversationSelected = threadIds.isNotEmpty() && selectedIds.containsAll(threadIds)
+                    val senderDisplay = remember(conversation.key, latest.sender, contactsGranted) {
+                        conversationTitle(context, conversation)
+                    }
+                    MessageRow(
+                        sender = senderDisplay,
+                        body = latest.body,
+                        status = conversationStatus(conversation),
+                        timestamp = latest.timestamp,
+                        simLabel = conversationSecondaryLine(conversation, activeSims),
+                        blocked = latest.blocked,
+                        ageAccentWithTimestamp = showArchiveAgeDividers,
+                        sameDayShowsTime = true,
+                        use24HourTime = use24HourTime,
+                        selected = conversationSelected,
+                        colors = colors,
+                        onAvatarClick = {
+                            selectedIds = if (conversationSelected) {
+                                selectedIds - threadIds
+                            } else {
+                                selectedIds + threadIds
+                            }
+                        },
+                        onClick = {
+                            if (selectedIds.isEmpty()) {
+                                onConversationClick(conversation)
+                            } else {
+                                selectedIds = if (conversationSelected) {
+                                    selectedIds - threadIds
+                                } else {
+                                    selectedIds + threadIds
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        FastScrollBar(listState = listState, colors = colors, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp))
+
+        if (selectedIds.isNotEmpty()) {
+            ReturnSelectionActionOverlay(
+                selectedCount = selectedIds.size,
+                accentColor = accentColor,
+                allSelected = allVisibleSelected,
+                onSelectAll = { selectedIds = if (allVisibleSelected) emptySet() else visibleIds },
+                onReturnToInbox = { pendingBulkAction = BulkMessageAction.RETURN_TO_INBOX },
+                onDelete = { pendingBulkAction = BulkMessageAction.DELETE },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+
+    pendingBulkAction?.let { action ->
+        val selectedCount = selectedMessages.size
+        AlertDialog(
+            onDismissRequest = { pendingBulkAction = null },
+            shape = RoundedCornerShape(24.dp),
+            title = {
+                Text(if (action == BulkMessageAction.RETURN_TO_INBOX) "Return messages to inbox?" else "Delete messages?")
+            },
+            text = {
+                Text(
+                    if (action == BulkMessageAction.RETURN_TO_INBOX) {
+                        "Move $selectedCount selected message${if (selectedCount == 1) "" else "s"} back to inbox?"
+                    } else {
+                        "Delete $selectedCount selected message${if (selectedCount == 1) "" else "s"} from SMS Shield?"
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val ids = selectedIds
+                        if (action == BulkMessageAction.RETURN_TO_INBOX) {
+                            onReturnMessagesToInbox(ids)
+                        } else {
+                            onDeleteMessages(ids)
+                        }
+                        selectedIds = emptySet()
+                        pendingBulkAction = null
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = if (action == BulkMessageAction.DELETE) {
+                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    } else {
+                        ButtonDefaults.buttonColors(containerColor = accentColor)
+                    }
+                ) {
+                    Text(if (action == BulkMessageAction.RETURN_TO_INBOX) "Return" else "Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBulkAction = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1928,11 +2413,16 @@ private fun FolderMessageListView(
     colors: UiColors,
     accentColor: Color,
     activeSims: List<SimInfo>,
+    use24HourTime: Boolean,
     searchQuery: String = "",
     listState: LazyListState,
     showArchiveAgeDividers: Boolean,
     statusForMessage: (SmsMessageRecord) -> String,
     blockedForRow: (SmsMessageRecord) -> Boolean,
+    returnWarningTitle: String? = null,
+    returnWarningText: String? = null,
+    returnConfirmText: String = "Return",
+    onReviewRules: () -> Unit = {},
     onReturnMessagesToInbox: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
     onMessageClick: (SmsMessageRecord) -> Unit
@@ -2017,6 +2507,8 @@ private fun FolderMessageListView(
                     simLabel = messageSecondaryLine(msg, activeSims),
                     blocked = blockedForRow(msg),
                     ageAccentWithTimestamp = showArchiveAgeDividers,
+                    sameDayShowsTime = true,
+                    use24HourTime = use24HourTime,
                     selected = msg.id in selectedIds,
                     colors = colors,
                     onAvatarClick = { toggleSelection(msg.id) },
@@ -2031,6 +2523,8 @@ private fun FolderMessageListView(
                 }
             }
         }
+
+        FastScrollBar(listState = listState, colors = colors, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp))
 
         if (selectedIds.isNotEmpty()) {
             ReturnSelectionActionOverlay(
@@ -2047,18 +2541,29 @@ private fun FolderMessageListView(
 
     pendingBulkAction?.let { action ->
         val selectedCount = selectedIds.size
+        val showReturnWarning = action == BulkMessageAction.RETURN_TO_INBOX && returnWarningTitle != null
         AlertDialog(
             onDismissRequest = { pendingBulkAction = null },
             shape = RoundedCornerShape(24.dp),
             title = {
-                Text(if (action == BulkMessageAction.RETURN_TO_INBOX) "Return messages to inbox?" else "Delete messages?")
+                Text(
+                    when {
+                        showReturnWarning -> returnWarningTitle.orEmpty()
+                        action == BulkMessageAction.RETURN_TO_INBOX -> "Return messages to inbox?"
+                        else -> "Delete messages?"
+                    }
+                )
             },
             text = {
                 Text(
-                    if (action == BulkMessageAction.RETURN_TO_INBOX) {
-                        "Move $selectedCount selected message${if (selectedCount == 1) "" else "s"} back to inbox?"
-                    } else {
-                        "Delete $selectedCount selected message${if (selectedCount == 1) "" else "s"} from SMS Shield?"
+                    when {
+                        showReturnWarning -> returnWarningText.orEmpty()
+                        action == BulkMessageAction.RETURN_TO_INBOX -> {
+                            "Move $selectedCount selected message${if (selectedCount == 1) "" else "s"} back to inbox?"
+                        }
+                        else -> {
+                            "Delete $selectedCount selected message${if (selectedCount == 1) "" else "s"} from SMS Shield?"
+                        }
                     }
                 )
             },
@@ -2081,12 +2586,25 @@ private fun FolderMessageListView(
                         ButtonDefaults.buttonColors(containerColor = accentColor)
                     }
                 ) {
-                    Text(if (action == BulkMessageAction.RETURN_TO_INBOX) "Return" else "Delete")
+                    Text(if (action == BulkMessageAction.RETURN_TO_INBOX) returnConfirmText else "Delete")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingBulkAction = null }) {
-                    Text("Cancel")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (showReturnWarning) {
+                        TextButton(
+                            onClick = {
+                                pendingBulkAction = null
+                                selectedIds = emptySet()
+                                onReviewRules()
+                            }
+                        ) {
+                            Text("Review Rules")
+                        }
+                    }
+                    TextButton(onClick = { pendingBulkAction = null }) {
+                        Text("Cancel")
+                    }
                 }
             }
         )
@@ -2285,7 +2803,7 @@ private fun MessageRow(
                         simLabel,
                         color = colors.muted,
                         style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -2302,6 +2820,57 @@ private fun MessageRow(
                 StatusPill(status, blocked, colorOverride = rowAccent)
             }
         }
+    }
+}
+
+@Composable
+private fun FastScrollBar(listState: LazyListState, colors: UiColors, modifier: Modifier = Modifier) {
+    val layoutInfo = listState.layoutInfo
+    val totalItems = layoutInfo.totalItemsCount
+    val visibleItems = layoutInfo.visibleItemsInfo.size
+    if (totalItems < 50 || totalItems <= visibleItems || visibleItems == 0) return
+
+    val scope = rememberCoroutineScope()
+    var dragOffsetPx by remember(totalItems, visibleItems) { mutableStateOf<Float?>(null) }
+    BoxWithConstraints(
+        modifier = modifier
+            .width(24.dp)
+            .fillMaxHeight()
+            .padding(vertical = 20.dp)
+    ) {
+        val density = LocalDensity.current
+        val trackHeightPx = with(density) { maxHeight.toPx() }
+        val thumbHeightPx = (trackHeightPx * visibleItems / totalItems).coerceIn(
+            with(density) { 44.dp.toPx() },
+            trackHeightPx
+        )
+        val maxThumbOffsetPx = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
+        val maxFirstIndex = (totalItems - visibleItems).coerceAtLeast(1)
+        val thumbOffsetPx = (listState.firstVisibleItemIndex.toFloat() / maxFirstIndex) * maxThumbOffsetPx
+        val displayedOffsetPx = dragOffsetPx ?: thumbOffsetPx
+        val thumbHeight = with(density) { thumbHeightPx.toDp() }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset(0, displayedOffsetPx.roundToInt()) }
+                .width(5.dp)
+                .height(thumbHeight)
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.muted.copy(alpha = 0.32f))
+                .draggable(
+                    orientation = Orientation.Vertical,
+                    state = rememberDraggableState { delta ->
+                        val nextOffset = ((dragOffsetPx ?: thumbOffsetPx) + delta).coerceIn(0f, maxThumbOffsetPx)
+                        dragOffsetPx = nextOffset
+                        val targetIndex = ((nextOffset / maxThumbOffsetPx) * maxFirstIndex).roundToInt()
+                        scope.launch {
+                            listState.scrollToItem(targetIndex.coerceIn(0, totalItems - 1))
+                        }
+                    },
+                    onDragStopped = { dragOffsetPx = null }
+                )
+        )
     }
 }
 
@@ -2483,8 +3052,9 @@ private fun conversationTitle(context: Context, conversation: ConversationThread
 private fun conversationSecondaryLine(conversation: ConversationThread, activeSims: List<SimInfo>): String? {
     return listOfNotNull(
         messageSimOverview(conversation.latest, activeSims),
+        if (conversation.messages.any { it.blockOverride }) "Block rule manually overridden" else null,
         if (conversation.messages.any { it.autoArchiveFrozen }) "Skip archiving" else null
-    ).takeIf { it.isNotEmpty() }?.joinToString(" | ")
+    ).takeIf { it.isNotEmpty() }?.joinToString("\n")
 }
 
 private fun compactDateLabel(timestamp: Long, sameDayShowsTime: Boolean, use24HourTime: Boolean): String {
@@ -2492,7 +3062,8 @@ private fun compactDateLabel(timestamp: Long, sameDayShowsTime: Boolean, use24Ho
         when {
             sameDayShowsTime && isTimestampToday(timestamp) -> if (use24HourTime) "HH:mm" else "h:mm a"
             isTimestampInCurrentWeek(timestamp) -> "EEE"
-            else -> "d MMM"
+            isTimestampInCurrentYear(timestamp) -> "d MMM"
+            else -> "d MMM, yyyy"
         },
         Locale.getDefault()
     ).format(Date(timestamp))
@@ -2515,6 +3086,12 @@ private fun isTimestampInCurrentWeek(timestamp: Long): Boolean {
     val then = Calendar.getInstance().apply { timeInMillis = timestamp }
     return now.get(Calendar.YEAR) == then.get(Calendar.YEAR) &&
         now.get(Calendar.WEEK_OF_YEAR) == then.get(Calendar.WEEK_OF_YEAR)
+}
+
+private fun isTimestampInCurrentYear(timestamp: Long): Boolean {
+    val now = Calendar.getInstance()
+    val then = Calendar.getInstance().apply { timeInMillis = timestamp }
+    return now.get(Calendar.YEAR) == then.get(Calendar.YEAR)
 }
 
 private fun isTimestampToday(timestamp: Long): Boolean {
@@ -2550,8 +3127,9 @@ private fun messageSimOverview(message: SmsMessageRecord, activeSims: List<SimIn
 private fun messageSecondaryLine(message: SmsMessageRecord, activeSims: List<SimInfo>): String? {
     return listOfNotNull(
         messageSimOverview(message, activeSims),
+        if (message.blockOverride) "Block rule manually overridden" else null,
         if (message.autoArchiveFrozen) "Skip archiving" else null
-    ).takeIf { it.isNotEmpty() }?.joinToString(" | ")
+    ).takeIf { it.isNotEmpty() }?.joinToString("\n")
 }
 
 private fun messageSimDetail(message: SmsMessageRecord, activeSims: List<SimInfo>): String? {
@@ -2661,13 +3239,15 @@ private fun MessageDetailView(
     onDelete: () -> Unit,
     onArchive: () -> Unit,
     onReturnToInbox: () -> Unit,
-    onAddRule: (RuleAction, RuleType, String) -> Unit
+    onReviewRules: () -> Unit = {},
+    onAddRule: (RuleAction, RuleType, String, String) -> Unit
 ) {
     val senderDisplay = rememberContactDisplay(message)
     val senderRule = remember(message.sender) { senderRuleForMessage(message.sender) }
     val simDetail = remember(message, activeSims) { messageSimDetail(message, activeSims) }
     var showDeleteConfirm by remember(message.id) { mutableStateOf(false) }
     var showArchiveConfirm by remember(message.id) { mutableStateOf(false) }
+    var showBlockedReturnConfirm by remember(message.id) { mutableStateOf(false) }
     var bodyValue by remember(message.id) { mutableStateOf(TextFieldValue(message.body)) }
     var addedNotice by remember(message.id) { mutableStateOf<String?>(null) }
     val clipboardManager = LocalClipboardManager.current
@@ -2733,8 +3313,12 @@ private fun MessageDetailView(
                         ) {
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.BLOCK, senderRule.type, senderRule.pattern)
-                                    addedNotice = "Added sender to block list."
+                                    onAddRule(
+                                        RuleAction.BLOCK,
+                                        senderRule.type,
+                                        senderRule.pattern,
+                                        "Sender \"${senderRule.pattern}\" has been added to the block list."
+                                    )
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
@@ -2743,8 +3327,12 @@ private fun MessageDetailView(
                             }
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.ALLOW, senderRule.type, senderRule.pattern)
-                                    addedNotice = "Added sender to allow list."
+                                    onAddRule(
+                                        RuleAction.ALLOW,
+                                        senderRule.type,
+                                        senderRule.pattern,
+                                        "Sender \"${senderRule.pattern}\" has been added to the allow list."
+                                    )
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
@@ -2770,10 +3358,18 @@ private fun MessageDetailView(
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (message.blocked) {
+                    if (message.blocked || message.blockOverride) {
                         Text(
                             blockedRuleHitText(blockedRuleHits),
                             color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (message.blockOverride) {
+                        Text(
+                            "Block rule manually overridden",
+                            color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -2802,8 +3398,12 @@ private fun MessageDetailView(
                         ) {
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.BLOCK, RuleType.KEYWORD, selectedText)
-                                    addedNotice = "Added selected text to block list."
+                                    onAddRule(
+                                        RuleAction.BLOCK,
+                                        RuleType.KEYWORD,
+                                        selectedText,
+                                        "The expression \"${selectedText}\" has been added to the block list."
+                                    )
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
@@ -2812,8 +3412,12 @@ private fun MessageDetailView(
                             }
                             Button(
                                 onClick = {
-                                    onAddRule(RuleAction.ALLOW, RuleType.KEYWORD, selectedText)
-                                    addedNotice = "Added selected text to allow list."
+                                    onAddRule(
+                                        RuleAction.ALLOW,
+                                        RuleType.KEYWORD,
+                                        selectedText,
+                                        "The expression \"${selectedText}\" has been added to the allow list."
+                                    )
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(14.dp)
@@ -2858,7 +3462,21 @@ private fun MessageDetailView(
                             Text("Delete", maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    if (!message.archived) {
+                    if (message.blocked) {
+                        Button(
+                            onClick = {
+                                if (blockedRuleHits.isNotEmpty()) {
+                                    showBlockedReturnConfirm = true
+                                } else {
+                                    onReturnToInbox()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("Return to Inbox")
+                        }
+                    } else if (!message.archived) {
                         Button(
                             onClick = {
                                 if (message.autoArchiveFrozen) {
@@ -2932,6 +3550,43 @@ private fun MessageDetailView(
             dismissButton = {
                 TextButton(onClick = { showArchiveConfirm = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showBlockedReturnConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBlockedReturnConfirm = false },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Return blocked message to inbox?") },
+            text = {
+                Text("This message still matches a block rule. Return only this message, or review the blocking rule?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBlockedReturnConfirm = false
+                        onReturnToInbox()
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Return Message")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            showBlockedReturnConfirm = false
+                            onReviewRules()
+                        }
+                    ) {
+                        Text("Review Rule")
+                    }
+                    TextButton(onClick = { showBlockedReturnConfirm = false }) {
+                        Text("Cancel")
+                    }
                 }
             }
         )
@@ -4052,7 +4707,7 @@ private fun SettingsView(
                     placeholder = "Off",
                     colors = colors,
                     onToggle = {
-                        cleanupNotice = if (it == null) "Cleanup disabled" else "Processing inbox now"
+                        cleanupNotice = if (it == null) "Automated archiving disabled" else "Processing inbox now"
                         onAutoArchiveDaysChange(it)
                     },
                     onMissingValue = {
@@ -4117,6 +4772,7 @@ private fun SettingsView(
                     when (notice) {
                         "Processing inbox now" -> "SMS Shield is archiving matching messages now."
                         "Processing blocked messages" -> "SMS Shield is checking blocked messages now."
+                        "Automated archiving disabled" -> "SMS Shield will no longer archive inbox messages automatically."
                         "Enter number of days first" -> "Type a day count, then turn the switch on."
                         "Enter number of hours first" -> "Type an hour count, then turn the switch on."
                         "Conversation grouping updated" -> "SMS Shield will split chats after the selected inactivity window."
@@ -4170,7 +4826,7 @@ private fun ImportExportSettings(
             onClick = { onSelectionChange(selection.copy(rules = !selection.rules)) }
         )
         BackupSwatchRow(
-            label = "Inbox",
+            label = "Messages",
             checked = selection.inbox,
             colors = colors,
             onClick = { onSelectionChange(selection.copy(inbox = !selection.inbox)) }
