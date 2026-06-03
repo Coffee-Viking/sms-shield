@@ -1,0 +1,4 @@
+Added archive and restore prompts for individual messages or whole chats.
+Returned archived messages are marked as skip archiving.
+Manual archive now clears the skip archiving flag.
+Updated sideload installation and update guidance.
