@@ -1,1 +1,1 @@
-Local SMS filtering with block, allow, archive, and OTP tools
+Rule-based SMS filtering with block lists, archive, and OTP tools
