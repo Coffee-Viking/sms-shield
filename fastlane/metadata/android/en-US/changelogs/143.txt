@@ -1,0 +1,6 @@
+Disabled Google dependency metadata in APK signing blocks.
+Fixed failed sent SMS returning as sent after app restart.
+Prevented deleted messages from returning after Android storage import.
+Added adaptive launcher icon support.
+Improved behavior during network disconnects and flight mode.
+Documented antivirus false-positive review status.
