@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.telephony.SubscriptionManager
 import androidx.core.content.ContextCompat
 
@@ -12,6 +13,9 @@ object SimRepository {
 
     fun activeSims(context: Context): List<SimInfo> {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            return emptyList()
+        }
+        if (isAirplaneModeOn(context)) {
             return emptyList()
         }
         val subscriptionManager = context.getSystemService(SubscriptionManager::class.java) ?: return emptyList()
@@ -33,11 +37,17 @@ object SimRepository {
         }
     }
 
+    fun isAirplaneModeOn(context: Context): Boolean {
+        return runCatching {
+            Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
+        }.getOrDefault(false)
+    }
+
     fun signature(activeSims: List<SimInfo>): String {
-        return activeSims
+        return "v2:" + activeSims
             .sortedWith(compareBy({ it.slotIndex }, { it.subscriptionId }))
             .joinToString(separator = "|") { sim ->
-                "${sim.subscriptionId}:${sim.slotIndex}:${sim.displayName}:${sim.carrierName.orEmpty()}"
+                "${sim.subscriptionId}:${sim.slotIndex}"
             }
     }
 

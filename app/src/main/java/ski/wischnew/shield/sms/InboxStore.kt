@@ -1,5 +1,6 @@
 package ski.wischnew.shield.sms
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -29,6 +30,7 @@ class InboxStore(private val context: Context) {
                 add(
                     SmsMessageRecord(
                         id = obj.getLong("id"),
+                        systemMessageId = obj.optNullableLong("systemMessageId"),
                         sender = obj.getString("sender"),
                         body = obj.getString("body"),
                         timestamp = obj.getLong("timestamp"),
@@ -75,12 +77,15 @@ class InboxStore(private val context: Context) {
     }
 
     fun deleteMessage(id: Long) {
-        saveMessages(listMessages().filterNot { it.id == id })
+        val messages = listMessages()
+        markSystemMessagesDeleted(messages.filter { it.id == id })
+        saveMessages(messages.filterNot { it.id == id })
     }
 
     fun deleteMessages(ids: Set<Long>): Int {
         if (ids.isEmpty()) return 0
         val before = listMessages()
+        markSystemMessagesDeleted(before.filter { it.id in ids })
         val updated = before.filterNot { it.id in ids }
         if (updated.size != before.size) saveMessages(updated)
         return before.size - updated.size
@@ -188,15 +193,25 @@ class InboxStore(private val context: Context) {
 
     fun updateDeliveryStatus(id: Long, status: String): Boolean {
         var changed = false
+        var statusMessage: SmsMessageRecord? = null
         val updated = listMessages().map { message ->
-            if (message.id == id && message.deliveryStatus != status) {
-                changed = true
-                message.copy(deliveryStatus = status)
+            if (message.id == id) {
+                val systemMessageId = message.systemMessageId ?: findSystemSmsProviderId(message)
+                val updatedMessage = message.copy(
+                    systemMessageId = systemMessageId,
+                    deliveryStatus = status
+                )
+                if (updatedMessage != message) {
+                    changed = true
+                }
+                statusMessage = updatedMessage
+                updatedMessage
             } else {
                 message
             }
         }
         if (changed) saveMessages(updated)
+        statusMessage?.let { updateSystemSmsProviderStatus(it, status) }
         return changed
     }
 
@@ -333,6 +348,8 @@ class InboxStore(private val context: Context) {
 
     fun importFromDeviceInbox(): Int {
         val existing = listMessages().associateBy { it.id }.toMutableMap()
+        val existingProviderIds = existing.values.mapNotNull { it.systemMessageId }.toMutableSet()
+        val deletedProviderIds = deletedSystemMessageIds()
         val activeSims = SimRepository.activeSims(context)
         val projection = arrayOf(
             Telephony.Sms._ID,
@@ -359,15 +376,29 @@ class InboxStore(private val context: Context) {
                 val typeIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
                 val subscriptionIndex = cursor.getColumnIndex(SimRepository.smsSubscriptionColumn())
                 var imported = 0
+                var merged = 0
 
                 while (cursor.moveToNext() && existing.size < 1000) {
                     val id = cursor.getLong(idIndex)
-                    if (existing.containsKey(id)) continue
+                    if (id in deletedProviderIds || id in existingProviderIds) continue
 
                     val type = cursor.getInt(typeIndex)
-                    val outgoing = type == Telephony.Sms.MESSAGE_TYPE_SENT ||
-                        type == Telephony.Sms.MESSAGE_TYPE_OUTBOX ||
-                        type == Telephony.Sms.MESSAGE_TYPE_QUEUED
+                    val outgoing = isOutgoingSystemSmsType(type)
+                    val deliveryStatus = deliveryStatusForSystemType(type)
+
+                    val current = existing[id]
+                    if (current != null) {
+                        if (current.systemMessageId == null || current.deliveryStatus == null) {
+                            existing[id] = current.copy(
+                                systemMessageId = current.systemMessageId ?: id,
+                                deliveryStatus = current.deliveryStatus ?: deliveryStatus
+                            )
+                            existingProviderIds += id
+                            merged++
+                        }
+                        continue
+                    }
+
                     val address = cursor.getString(addressIndex).orEmpty()
                     val sender = if (outgoing) "To: $address" else address
                     val body = cursor.getString(bodyIndex).orEmpty()
@@ -380,23 +411,38 @@ class InboxStore(private val context: Context) {
                     val simFields = SimRepository.fieldsFromSmsProvider(subscriptionId, activeSims)
                     val importedMessage = SmsMessageRecord(
                         id = id,
+                        systemMessageId = id,
                         sender = sender,
                         body = body,
                         timestamp = timestamp,
                         blocked = false,
                         outgoing = outgoing,
                         archived = false,
-                        deliveryStatus = null,
+                        deliveryStatus = deliveryStatus,
                         simSubscriptionId = simFields.subscriptionId,
                         simSlotIndex = simFields.slotIndex,
                         simDisplayName = simFields.displayName,
                         simCarrierName = simFields.carrierName
                     )
-                    if (existing.values.any { it.isLikelyDuplicateOf(importedMessage) }) continue
+                    val duplicate = existing.values.firstOrNull { it.isLikelyDuplicateOf(importedMessage) }
+                    if (duplicate != null) {
+                        if (duplicate.systemMessageId == null || duplicate.deliveryStatus == null) {
+                            existing[duplicate.id] = duplicate.copy(
+                                systemMessageId = duplicate.systemMessageId ?: id,
+                                deliveryStatus = duplicate.deliveryStatus ?: deliveryStatus
+                            )
+                            existingProviderIds += id
+                            merged++
+                        }
+                        continue
+                    }
                     existing[id] = importedMessage
+                    existingProviderIds += id
                     imported++
                 }
-                saveMessages(existing.values.sortedByDescending { it.timestamp }.take(1000))
+                if (imported > 0 || merged > 0) {
+                    saveMessages(existing.values.sortedByDescending { it.timestamp }.take(1000))
+                }
                 imported
             } ?: 0
         } catch (_: SecurityException) {
@@ -425,10 +471,10 @@ class InboxStore(private val context: Context) {
             ?: insertSystemSms(message, outgoing, includeSubscription = false)
             ?: return message
         val providerId = inserted.lastPathSegment?.toLongOrNull()
-        return if (adoptProviderId && providerId != null) {
-            message.copy(id = providerId)
-        } else {
-            message
+        return when {
+            providerId == null -> message
+            adoptProviderId -> message.copy(id = providerId, systemMessageId = providerId)
+            else -> message.copy(systemMessageId = providerId)
         }
     }
 
@@ -442,7 +488,7 @@ class InboxStore(private val context: Context) {
             put(Telephony.Sms.SEEN, 1)
             put(
                 Telephony.Sms.TYPE,
-                if (outgoing) Telephony.Sms.MESSAGE_TYPE_SENT else Telephony.Sms.MESSAGE_TYPE_INBOX
+                systemTypeForMessage(message, outgoing)
             )
             if (includeSubscription) {
                 message.simSubscriptionId?.let { put(SimRepository.smsSubscriptionColumn(), it) }
@@ -457,6 +503,7 @@ class InboxStore(private val context: Context) {
     private fun SmsMessageRecord.toJson(): JSONObject {
         return JSONObject()
             .put("id", id)
+            .put("systemMessageId", systemMessageId ?: JSONObject.NULL)
             .put("sender", sender)
             .put("body", body)
             .put("timestamp", timestamp)
@@ -483,10 +530,115 @@ class InboxStore(private val context: Context) {
         return if (has(name) && !isNull(name)) optInt(name) else null
     }
 
+    private fun JSONObject.optNullableLong(name: String): Long? {
+        return if (has(name) && !isNull(name)) optLong(name) else null
+    }
+
+    private fun markSystemMessagesDeleted(messages: List<SmsMessageRecord>) {
+        val ids = messages.mapNotNull { message ->
+            message.systemMessageId ?: findSystemSmsProviderId(message)
+        }.map { it.toString() }
+        if (ids.isEmpty()) return
+
+        val existing = prefs.getStringSet(DELETED_SYSTEM_MESSAGE_IDS_KEY, emptySet()).orEmpty()
+        prefs.edit()
+            .putStringSet(DELETED_SYSTEM_MESSAGE_IDS_KEY, existing + ids)
+            .apply()
+    }
+
+    private fun deletedSystemMessageIds(): Set<Long> {
+        return prefs.getStringSet(DELETED_SYSTEM_MESSAGE_IDS_KEY, emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .toSet()
+    }
+
+    private fun findSystemSmsProviderId(message: SmsMessageRecord): Long? {
+        if (Telephony.Sms.getDefaultSmsPackage(context) != context.packageName) return null
+
+        val address = if (message.outgoing) message.sender.removePrefix("To: ").trim() else message.sender
+        val minDate = message.timestamp - DUPLICATE_WINDOW_MILLIS
+        val maxDate = message.timestamp + DUPLICATE_WINDOW_MILLIS
+        val projection = arrayOf(
+            Telephony.Sms._ID,
+            Telephony.Sms.TYPE
+        )
+        return runCatching {
+            context.contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                projection,
+                "${Telephony.Sms.ADDRESS} = ? AND ${Telephony.Sms.BODY} = ? AND ${Telephony.Sms.DATE} BETWEEN ? AND ?",
+                arrayOf(address, message.body, minDate.toString(), maxDate.toString()),
+                "${Telephony.Sms.DATE} DESC"
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
+                val typeIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+                while (cursor.moveToNext()) {
+                    val type = cursor.getInt(typeIndex)
+                    if (isOutgoingSystemSmsType(type) == message.outgoing) {
+                        return@use cursor.getLong(idIndex)
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+    }
+
+    private fun updateSystemSmsProviderStatus(message: SmsMessageRecord, status: String) {
+        if (Telephony.Sms.getDefaultSmsPackage(context) != context.packageName) return
+        if (!message.outgoing) return
+
+        val providerId = message.systemMessageId ?: findSystemSmsProviderId(message) ?: return
+        val values = ContentValues().apply {
+            put(Telephony.Sms.TYPE, systemTypeForDeliveryStatus(status))
+        }
+        runCatching {
+            context.contentResolver.update(
+                ContentUris.withAppendedId(Telephony.Sms.CONTENT_URI, providerId),
+                values,
+                null,
+                null
+            )
+        }
+    }
+
+    private fun systemTypeForMessage(message: SmsMessageRecord, outgoing: Boolean): Int {
+        return if (!outgoing) {
+            Telephony.Sms.MESSAGE_TYPE_INBOX
+        } else {
+            systemTypeForDeliveryStatus(message.deliveryStatus)
+        }
+    }
+
+    private fun systemTypeForDeliveryStatus(status: String?): Int {
+        return when (status) {
+            SmsStatusReceiver.DELIVERY_STATUS_SEND_FAILED -> Telephony.Sms.MESSAGE_TYPE_FAILED
+            else -> Telephony.Sms.MESSAGE_TYPE_SENT
+        }
+    }
+
+    private fun isOutgoingSystemSmsType(type: Int): Boolean {
+        return type == Telephony.Sms.MESSAGE_TYPE_SENT ||
+            type == Telephony.Sms.MESSAGE_TYPE_OUTBOX ||
+            type == Telephony.Sms.MESSAGE_TYPE_QUEUED ||
+            type == Telephony.Sms.MESSAGE_TYPE_FAILED
+    }
+
+    private fun deliveryStatusForSystemType(type: Int): String? {
+        return when (type) {
+            Telephony.Sms.MESSAGE_TYPE_SENT -> SmsStatusReceiver.DELIVERY_STATUS_SENT
+            Telephony.Sms.MESSAGE_TYPE_OUTBOX,
+            Telephony.Sms.MESSAGE_TYPE_QUEUED -> SmsStatusReceiver.DELIVERY_STATUS_QUEUED
+            Telephony.Sms.MESSAGE_TYPE_FAILED -> SmsStatusReceiver.DELIVERY_STATUS_SEND_FAILED
+            else -> null
+        }
+    }
+
     companion object {
         const val ACTION_MESSAGES_UPDATED = "ski.wischnew.shield.MESSAGES_UPDATED"
         private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
         private const val DUPLICATE_WINDOW_MILLIS = 10_000L
+        private const val DELETED_SYSTEM_MESSAGE_IDS_KEY = "deleted_system_message_ids"
 
         fun notifyMessagesUpdated(context: Context) {
             context.sendBroadcast(Intent(ACTION_MESSAGES_UPDATED).setPackage(context.packageName))
@@ -495,6 +647,7 @@ class InboxStore(private val context: Context) {
         fun messageFromJson(obj: JSONObject, blocked: Boolean? = null, archived: Boolean? = null): SmsMessageRecord {
             return SmsMessageRecord(
                 id = obj.optLong("id", System.currentTimeMillis()),
+                systemMessageId = obj.optNullableLong("systemMessageId"),
                 sender = obj.optString("sender", ""),
                 body = obj.optString("body", ""),
                 timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
@@ -515,4 +668,8 @@ class InboxStore(private val context: Context) {
 
 private fun JSONObject.optNullableInt(name: String): Int? {
     return if (has(name) && !isNull(name)) optInt(name) else null
+}
+
+private fun JSONObject.optNullableLong(name: String): Long? {
+    return if (has(name) && !isNull(name)) optLong(name) else null
 }

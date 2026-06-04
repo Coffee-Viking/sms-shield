@@ -66,6 +66,18 @@ To manually set SMS Shield as the default SMS app:
 Both aspects will be resolved once this app gets listed in app stores, this issue only
 exists temporarily while sideloading from GitHub or other archives.
 
+## Antivirus False Positives
+
+A small number of antivirus engines on VirusTotal currently flag the release APK.
+I believe these are false positives related to SMS Shield being a default SMS app
+with SMS permissions and OTP copy functionality. Malicious apps can abuse similar
+permissions and OTP access to exfiltrate codes or hijack accounts, which is likely
+why some engines classify the APK as "Trojan", "Generic.Spy", or "Generic.Riskware".
+
+I have contacted the affected antivirus vendors and requested manual review. Some
+have already acknowledged the request and indicated that the flag will be removed.
+Related correspondence is tracked in `false positives/`.
+
 ## License
 
 SMS Shield is licensed under the GNU General Public License version 3.0 only.

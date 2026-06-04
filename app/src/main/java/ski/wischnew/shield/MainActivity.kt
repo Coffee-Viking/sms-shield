@@ -134,6 +134,8 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -479,12 +481,15 @@ private fun SmsShieldApp(
     var archiveDirectionFilter by remember { mutableStateOf(MessageDirectionFilter.ALL) }
     var restoreSearchAfterDetail by remember { mutableStateOf(false) }
     var scrollInboxToTopAfterDetail by remember { mutableStateOf(false) }
+    var inboxScrollToTopRequest by remember { mutableIntStateOf(0) }
     var pendingRetroactiveBlockRule by remember { mutableStateOf<Rule?>(null) }
     var messages by remember { mutableStateOf<List<SmsMessageRecord>>(emptyList()) }
     var messagesLoaded by remember { mutableStateOf(false) }
     var mainSelectionActive by remember { mutableStateOf(false) }
     var showBatteryOptimizationPrompt by remember { mutableStateOf(false) }
     var showSimChangedPrompt by remember { mutableStateOf(false) }
+    var showNoSimPrompt by remember { mutableStateOf(false) }
+    var noSimPromptShownForOutage by remember { mutableStateOf(false) }
     var showBlockedAutoDeletePrompt by remember { mutableStateOf(false) }
     var blockedAutoDeleteCandidateCount by remember { mutableIntStateOf(0) }
     var blockedAutoDeletePromptShown by remember { mutableStateOf(false) }
@@ -652,9 +657,17 @@ private fun SmsShieldApp(
         val refreshed = SimRepository.activeSims(context)
         val signature = SimRepository.signature(refreshed)
         val previousSignature = appSettingsStore.getKnownSimSignature()
+        val previousHasStableSignature = previousSignature.startsWith("v2:")
         activeSims = refreshed
-        if (signature.isNotBlank()) {
-            if (promptOnChange && previousSignature.isNotBlank() && previousSignature != signature) {
+        if (refreshed.isEmpty()) {
+            showSimChangedPrompt = false
+            if (promptOnChange && previousSignature.isNotBlank() && !noSimPromptShownForOutage) {
+                showNoSimPrompt = true
+                noSimPromptShownForOutage = true
+            }
+        } else if (signature.isNotBlank()) {
+            noSimPromptShownForOutage = false
+            if (promptOnChange && previousHasStableSignature && previousSignature != signature) {
                 showSimChangedPrompt = true
             }
             appSettingsStore.setKnownSimSignature(signature)
@@ -681,7 +694,7 @@ private fun SmsShieldApp(
         selectedConversationKey = null
         if (scrollInboxToTopAfterDetail) {
             scrollInboxToTopAfterDetail = false
-            scope.launch { inboxListState.scrollToItem(0) }
+            inboxScrollToTopRequest++
         }
         if (restoreSearchAfterDetail && screen.supportsSearch()) {
             searchActive = true
@@ -853,6 +866,10 @@ private fun SmsShieldApp(
         }
         messages = loadedMessages
         messagesLoaded = true
+        if (scrollInboxToTopAfterDetail && screen == Screen.MAIN && selectedMessage == null && selectedConversationKey == null) {
+            scrollInboxToTopAfterDetail = false
+            inboxScrollToTopRequest++
+        }
     }
 
     LaunchedEffect(messagesLoaded, messages, notificationMessageId) {
@@ -920,14 +937,39 @@ private fun SmsShieldApp(
 
     DisposableEffect(Unit) {
         val subscriptionManager = context.getSystemService(SubscriptionManager::class.java)
+        var refreshJob: Job? = null
         val listener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
             override fun onSubscriptionsChanged() {
-                refreshActiveSims(true)
+                refreshJob?.cancel()
+                refreshJob = scope.launch {
+                    delay(750)
+                    refreshActiveSims(true)
+                }
             }
         }
         runCatching { subscriptionManager?.addOnSubscriptionsChangedListener(listener) }
         onDispose {
+            refreshJob?.cancel()
             runCatching { subscriptionManager?.removeOnSubscriptionsChangedListener(listener) }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val airplaneModeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == Intent.ACTION_AIRPLANE_MODE_CHANGED) {
+                    refreshActiveSims(true)
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(airplaneModeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(airplaneModeReceiver, filter)
+        }
+        onDispose {
+            runCatching { context.unregisterReceiver(airplaneModeReceiver) }
         }
     }
 
@@ -1144,6 +1186,7 @@ private fun SmsShieldApp(
                                 conversationSplitHours = conversationSplitHours,
                                 listState = inboxListState,
                                 use24HourTime = use24HourTime,
+                                scrollToTopRequest = inboxScrollToTopRequest,
                                 onArchiveMessages = archiveMessages,
                                 onSetMessagesFrozen = setMessagesFrozen,
                                 onDeleteMessages = deleteMessages,
@@ -1362,8 +1405,10 @@ private fun SmsShieldApp(
                     )
                     inboxStore.addSentMessage(sentMessage)
                     inboxVersion++
+                    scrollInboxToTopAfterDetail = true
                     composeError = null
                     showComposeDialog = false
+                    inboxScrollToTopRequest++
                     composeInitialRecipient = ""
                     composeInitialBody = ""
                     composeSourceMessage = null
@@ -1658,6 +1703,23 @@ private fun SmsShieldApp(
         )
     }
 
+    if (showNoSimPrompt) {
+        AlertDialog(
+            onDismissRequest = { showNoSimPrompt = false },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("No SIM detected") },
+            text = { Text("No active SIM is currently available. If airplane mode is enabled, SMS sending and SIM-specific options will be unavailable until cellular service returns.") },
+            confirmButton = {
+                Button(
+                    onClick = { showNoSimPrompt = false },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
     if (showBlockedAutoDeletePrompt && autoDeleteBlockedDays != null) {
         AlertDialog(
             onDismissRequest = { showBlockedAutoDeletePrompt = false },
@@ -1887,6 +1949,7 @@ private fun MainListView(
     conversationSplitHours: Int?,
     listState: LazyListState,
     use24HourTime: Boolean,
+    scrollToTopRequest: Int,
     onArchiveMessages: (Set<Long>) -> Unit,
     onSetMessagesFrozen: (Set<Long>, Boolean) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
@@ -1933,6 +1996,11 @@ private fun MainListView(
                         simLabel.contains(query, ignoreCase = true)
                 }
             }
+        }
+    }
+    LaunchedEffect(scrollToTopRequest, filteredConversations) {
+        if (scrollToTopRequest > 0) {
+            listState.scrollToItem(0)
         }
     }
     val selectedMessages = remember(filteredConversations, selectedIds) {

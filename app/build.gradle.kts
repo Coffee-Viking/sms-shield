@@ -13,12 +13,18 @@ val keystoreProperties = Properties().apply {
     }
 }
 
-val appVersionCode = 142
-val appVersionName = "1.42"
+val appVersionCode = 143
+val appVersionName = "1.43"
 
 android {
     namespace = "ski.wischnew.shield"
     compileSdk = 35
+
+    dependenciesInfo {
+        // Disables Google dependency metadata in APK/AAB signing blocks.
+        includeInApk = false
+        includeInBundle = false
+    }
 
     defaultConfig {
         applicationId = "ski.wischnew.shield"

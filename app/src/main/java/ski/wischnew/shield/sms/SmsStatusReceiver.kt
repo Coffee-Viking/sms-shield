@@ -35,6 +35,7 @@ class SmsStatusReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_STATUS_UPDATED = "ski.wischnew.shield.SMS_STATUS_UPDATED"
         const val DELIVERY_STATUS_SENT = "Sent"
+        const val DELIVERY_STATUS_QUEUED = "Queued"
         const val DELIVERY_STATUS_DELIVERED = "Delivered"
         const val DELIVERY_STATUS_SEND_FAILED = "Send failed"
         const val DELIVERY_STATUS_DELIVERY_FAILED = "Delivery failed"

@@ -2,6 +2,7 @@ package ski.wischnew.shield.sms
 
 data class SmsMessageRecord(
     val id: Long = System.currentTimeMillis(),
+    val systemMessageId: Long? = null,
     val sender: String,
     val body: String,
     val timestamp: Long = System.currentTimeMillis(),
