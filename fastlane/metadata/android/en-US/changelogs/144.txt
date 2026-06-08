@@ -1,0 +1,4 @@
+Use rolling recent-date logic instead of calendar week boundaries.
+Default time format to the Android system setting on first launch.
+Snooze blocked-message deletion reminders for 7 days after "Not Now".
+Link the sidebar brand/version block to the SMS Shield website.

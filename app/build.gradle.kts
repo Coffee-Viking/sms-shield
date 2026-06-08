@@ -13,8 +13,8 @@ val keystoreProperties = Properties().apply {
     }
 }
 
-val appVersionCode = 143
-val appVersionName = "1.43"
+val appVersionCode = 144
+val appVersionName = "1.44"
 
 android {
     namespace = "ski.wischnew.shield"

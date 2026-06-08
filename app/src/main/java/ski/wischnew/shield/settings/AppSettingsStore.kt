@@ -1,6 +1,7 @@
 package ski.wischnew.shield.settings
 
 import android.content.Context
+import android.text.format.DateFormat
 import org.json.JSONObject
 
 enum class ThemeMode {
@@ -16,7 +17,8 @@ enum class SimSendMode {
 }
 
 class AppSettingsStore(context: Context) {
-    private val prefs = context.getSharedPreferences("sms_shield_settings", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("sms_shield_settings", Context.MODE_PRIVATE)
 
     fun getThemeMode(): ThemeMode {
         return runCatching { ThemeMode.valueOf(prefs.getString("theme_mode", ThemeMode.DARK.name) ?: ThemeMode.DARK.name) }
@@ -57,11 +59,15 @@ class AppSettingsStore(context: Context) {
     }
 
     fun getUse24HourTime(): Boolean {
-        return prefs.getBoolean("use_24_hour_time", false)
+        return if (prefs.contains(USE_24_HOUR_TIME_KEY)) {
+            prefs.getBoolean(USE_24_HOUR_TIME_KEY, false)
+        } else {
+            DateFormat.is24HourFormat(appContext)
+        }
     }
 
     fun setUse24HourTime(enabled: Boolean) {
-        prefs.edit().putBoolean("use_24_hour_time", enabled).apply()
+        prefs.edit().putBoolean(USE_24_HOUR_TIME_KEY, enabled).apply()
     }
 
     fun getBatteryPromptAcknowledged(): Boolean {
@@ -128,6 +134,18 @@ class AppSettingsStore(context: Context) {
         prefs.edit().putBoolean("warn_before_blocked_auto_delete", warn).apply()
     }
 
+    fun getBlockedAutoDeleteSnoozedUntil(): Long {
+        return prefs.getLong(BLOCKED_AUTO_DELETE_SNOOZED_UNTIL_KEY, 0L)
+    }
+
+    fun setBlockedAutoDeleteSnoozedUntil(timestamp: Long) {
+        prefs.edit().putLong(BLOCKED_AUTO_DELETE_SNOOZED_UNTIL_KEY, timestamp.coerceAtLeast(0L)).apply()
+    }
+
+    fun clearBlockedAutoDeleteSnooze() {
+        prefs.edit().remove(BLOCKED_AUTO_DELETE_SNOOZED_UNTIL_KEY).apply()
+    }
+
     fun getChatModeEnabled(): Boolean {
         return prefs.getBoolean("chat_mode_enabled", true)
     }
@@ -172,7 +190,7 @@ class AppSettingsStore(context: Context) {
             editor.putBoolean("delivery_reports_enabled", obj.optBoolean("deliveryReportsEnabled", false))
         }
         if (obj.has("use24HourTime")) {
-            editor.putBoolean("use_24_hour_time", obj.optBoolean("use24HourTime", false))
+            editor.putBoolean(USE_24_HOUR_TIME_KEY, obj.optBoolean("use24HourTime", false))
         }
         obj.optString("simSendMode", "").takeIf { it.isNotBlank() }?.let { value ->
             runCatching { SimSendMode.valueOf(value) }.getOrNull()?.let { editor.putString("sim_send_mode", it.name) }
@@ -221,6 +239,8 @@ class AppSettingsStore(context: Context) {
     companion object {
         private const val LEGACY_ACCENT_COLOR_KEY = "accent_color"
         private const val ACCENT_COLOR_ARGB_KEY = "accent_color_argb"
+        private const val USE_24_HOUR_TIME_KEY = "use_24_hour_time"
+        private const val BLOCKED_AUTO_DELETE_SNOOZED_UNTIL_KEY = "blocked_auto_delete_snoozed_until"
         private const val INVALID_SUBSCRIPTION_ID = -1
         private const val DEFAULT_CONVERSATION_SPLIT_HOURS = 24
         private val DEFAULT_ACCENT_COLOR = 0xFF179BFF.toInt()

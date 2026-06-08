@@ -101,6 +101,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -435,6 +436,7 @@ private data class UiColors(
 private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
 private const val MILLIS_PER_HOUR = 60L * 60L * 1000L
 private const val BACKUP_SCHEMA_VERSION = 1
+private const val SMS_SHIELD_WEBSITE_URL = "https://shield.wischnew.ski"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -907,7 +909,8 @@ private fun SmsShieldApp(
                 0
             }
         }
-        if (autoDeleteBlockedDays != null && warnBeforeBlockedAutoDelete && !blockedAutoDeletePromptShown) {
+        val blockedAutoDeleteSnoozed = appSettingsStore.getBlockedAutoDeleteSnoozedUntil() > System.currentTimeMillis()
+        if (autoDeleteBlockedDays != null && warnBeforeBlockedAutoDelete && !blockedAutoDeletePromptShown && !blockedAutoDeleteSnoozed) {
             val count = withContext(Dispatchers.IO) {
                 inboxStore.countBlockedOlderThan(autoDeleteBlockedDays)
             }
@@ -1334,10 +1337,16 @@ private fun SmsShieldApp(
                             cleanupApplyVersion++
                         },
                         onAutoDeleteBlockedDaysChange = {
+                            appSettingsStore.clearBlockedAutoDeleteSnooze()
+                            blockedAutoDeletePromptShown = false
                             onAutoDeleteBlockedDaysChange(it)
                             cleanupApplyVersion++
                         },
-                        onWarnBeforeBlockedAutoDeleteChange = onWarnBeforeBlockedAutoDeleteChange,
+                        onWarnBeforeBlockedAutoDeleteChange = {
+                            appSettingsStore.clearBlockedAutoDeleteSnooze()
+                            blockedAutoDeletePromptShown = false
+                            onWarnBeforeBlockedAutoDeleteChange(it)
+                        },
                         onChatModeEnabledChange = onChatModeEnabledChange,
                         onConversationSplitHoursChange = onConversationSplitHoursChange,
                         backupSelection = backupSelection,
@@ -1721,8 +1730,12 @@ private fun SmsShieldApp(
     }
 
     if (showBlockedAutoDeletePrompt && autoDeleteBlockedDays != null) {
+        val snoozeBlockedDeleteReminder = {
+            appSettingsStore.setBlockedAutoDeleteSnoozedUntil(System.currentTimeMillis() + 7 * MILLIS_PER_DAY)
+            showBlockedAutoDeletePrompt = false
+        }
         AlertDialog(
-            onDismissRequest = { showBlockedAutoDeletePrompt = false },
+            onDismissRequest = snoozeBlockedDeleteReminder,
             shape = RoundedCornerShape(24.dp),
             title = { Text("Delete old blocked messages?") },
             text = {
@@ -1753,7 +1766,7 @@ private fun SmsShieldApp(
                     ) {
                         Text("Review")
                     }
-                    TextButton(onClick = { showBlockedAutoDeletePrompt = false }) {
+                    TextButton(onClick = snoozeBlockedDeleteReminder) {
                         Text("Not Now")
                     }
                 }
@@ -1806,9 +1819,12 @@ private fun DrawerItem(
 
 @Composable
 private fun DrawerFooter(versionName: String) {
+    val uriHandler = LocalUriHandler.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable { uriHandler.openUri(SMS_SHIELD_WEBSITE_URL) }
             .padding(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2861,15 +2877,15 @@ private fun MessageRow(
     onAvatarClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    val currentWeek = isTimestampInCurrentWeek(timestamp)
+    val recent = isTimestampRecent(timestamp)
     val agedColor = colors.muted.copy(alpha = 0.58f)
     val rowAccent = when {
         blocked -> MaterialTheme.colorScheme.error
-        ageAccentWithTimestamp && !currentWeek -> agedColor
+        ageAccentWithTimestamp && !recent -> agedColor
         else -> MaterialTheme.colorScheme.primary
     }
     val dateColor = when {
-        currentWeek -> MaterialTheme.colorScheme.primary
+        recent -> MaterialTheme.colorScheme.primary
         ageAccentWithTimestamp -> agedColor
         else -> colors.muted
     }
@@ -2911,7 +2927,7 @@ private fun MessageRow(
                     compactDateLabel(timestamp, sameDayShowsTime, use24HourTime),
                     color = dateColor,
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (currentWeek) FontWeight.SemiBold else FontWeight.Normal
+                    fontWeight = if (recent) FontWeight.SemiBold else FontWeight.Normal
                 )
                 StatusPill(status, blocked, colorOverride = rowAccent)
             }
@@ -3157,7 +3173,7 @@ private fun compactDateLabel(timestamp: Long, sameDayShowsTime: Boolean, use24Ho
     return SimpleDateFormat(
         when {
             sameDayShowsTime && isTimestampToday(timestamp) -> if (use24HourTime) "HH:mm" else "h:mm a"
-            isTimestampInCurrentWeek(timestamp) -> "EEE"
+            isTimestampRecent(timestamp) -> "EEE"
             isTimestampInCurrentYear(timestamp) -> "d MMM"
             else -> "d MMM, yyyy"
         },
@@ -3177,11 +3193,24 @@ private fun timestampedBackupFilename(): String {
     return "sms-shield-backup-$timestamp.json"
 }
 
-private fun isTimestampInCurrentWeek(timestamp: Long): Boolean {
-    val now = Calendar.getInstance()
-    val then = Calendar.getInstance().apply { timeInMillis = timestamp }
-    return now.get(Calendar.YEAR) == then.get(Calendar.YEAR) &&
-        now.get(Calendar.WEEK_OF_YEAR) == then.get(Calendar.WEEK_OF_YEAR)
+private fun isTimestampRecent(timestamp: Long): Boolean {
+    if (timestamp > System.currentTimeMillis()) return true
+    val now = startOfTodayMillis()
+    val then = startOfDayMillis(timestamp)
+    val ageDays = (now - then) / MILLIS_PER_DAY
+    return ageDays in 0..6
+}
+
+private fun startOfTodayMillis(): Long = startOfDayMillis(System.currentTimeMillis())
+
+private fun startOfDayMillis(timestamp: Long): Long {
+    return Calendar.getInstance().apply {
+        timeInMillis = timestamp
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
 }
 
 private fun isTimestampInCurrentYear(timestamp: Long): Boolean {
@@ -4916,6 +4945,11 @@ private fun SettingsView(
                     checked = warnBeforeBlockedAutoDelete,
                     colors = colors,
                     onCheckedChange = onWarnBeforeBlockedAutoDeleteChange
+                )
+                Text(
+                    "Choosing \"Not Now\" pauses the deletion reminder for 7 days.",
+                    color = colors.muted,
+                    modifier = Modifier.padding(horizontal = 14.dp)
                 )
             }
         }
