@@ -8,6 +8,9 @@ import android.net.Uri
 import android.provider.Telephony
 import ski.wischnew.shield.rules.FilterEngine
 import ski.wischnew.shield.rules.Rule
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.max
 import org.json.JSONArray
@@ -250,6 +253,37 @@ class InboxStore(private val context: Context) {
         return changed
     }
 
+    fun reblockOverriddenMessages(ids: Set<Long>, rules: List<Rule>, defaultRegion: String): Int {
+        if (ids.isEmpty()) return 0
+        val engine = FilterEngine()
+        var changed = 0
+        val updated = listMessages().map { message ->
+            if (message.id in ids && !message.outgoing && message.blockOverride) {
+                val shouldBlock = engine.shouldBlock(
+                    sender = message.sender,
+                    body = message.body,
+                    rules = rules,
+                    defaultRegion = defaultRegion
+                )
+                if (shouldBlock) {
+                    changed++
+                    message.copy(
+                        blocked = true,
+                        archived = false,
+                        autoArchiveFrozen = false,
+                        blockOverride = false
+                    )
+                } else {
+                    message
+                }
+            } else {
+                message
+            }
+        }
+        if (changed > 0) saveMessages(updated)
+        return changed
+    }
+
     fun moveNoLongerBlockedToInbox(rules: List<Rule>, defaultRegion: String): Int {
         val engine = FilterEngine()
         var moved = 0
@@ -292,18 +326,55 @@ class InboxStore(private val context: Context) {
     }
 
     fun countBlockedOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int {
-        if (days <= 0) return 0
-        val cutoff = now - days * MILLIS_PER_DAY
-        return listMessages().count { it.blocked && it.timestamp < cutoff }
+        return blockedAutoDeleteCandidateIds(days, now).size
     }
 
     fun deleteBlockedOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int {
         if (days <= 0) return 0
-        val cutoff = now - days * MILLIS_PER_DAY
+        val candidateIds = blockedAutoDeleteCandidateIds(days, now).toSet()
+        if (candidateIds.isEmpty()) return 0
         val before = listMessages()
-        val updated = before.filterNot { it.blocked && it.timestamp < cutoff }
+        val updated = before.filterNot { it.id in candidateIds }
         if (updated.size != before.size) saveMessages(updated)
         return before.size - updated.size
+    }
+
+    fun blockedAutoDeleteCandidateIds(days: Int, now: Long = System.currentTimeMillis()): List<Long> {
+        if (days <= 0) return emptyList()
+        val cutoffDate = Instant.ofEpochMilli(now)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .minusDays(days.toLong())
+        return listMessages()
+            .filter { message -> message.isBlockedAutoDeleteCandidate(cutoffDate) }
+            .map { it.id }
+    }
+
+    fun blockedAutoDeleteDeferralCandidateIds(ids: Set<Long>, days: Int, now: Long = System.currentTimeMillis()): List<Long> {
+        if (ids.isEmpty() || days <= 0) return emptyList()
+        val cutoffDate = Instant.ofEpochMilli(now)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+            .minusDays(days.toLong())
+        return listMessages()
+            .filter { message -> message.id in ids && message.isBlockedAutoDeleteDeferralCandidate(cutoffDate) }
+            .map { it.id }
+    }
+
+    private fun SmsMessageRecord.isBlockedAutoDeleteCandidate(cutoffDate: LocalDate): Boolean {
+        if (!blocked || archived) return false
+        val messageDate = Instant.ofEpochMilli(timestamp)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+        return !messageDate.isAfter(cutoffDate)
+    }
+
+    private fun SmsMessageRecord.isBlockedAutoDeleteDeferralCandidate(cutoffDate: LocalDate): Boolean {
+        if (outgoing || (!blocked && !blockOverride)) return false
+        val messageDate = Instant.ofEpochMilli(timestamp)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDate()
+        return !messageDate.isAfter(cutoffDate)
     }
 
     fun exportMessages(predicate: (SmsMessageRecord) -> Boolean): JSONArray {

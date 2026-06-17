@@ -494,7 +494,9 @@ private fun SmsShieldApp(
     var noSimPromptShownForOutage by remember { mutableStateOf(false) }
     var showBlockedAutoDeletePrompt by remember { mutableStateOf(false) }
     var blockedAutoDeleteCandidateCount by remember { mutableIntStateOf(0) }
-    var blockedAutoDeletePromptShown by remember { mutableStateOf(false) }
+    var blockedAutoDeletePromptCandidateIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var blockedDeletionReviewIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var blockedDeletionReviewScrollRequest by remember { mutableIntStateOf(0) }
     var pendingMessageRuleConflict by remember { mutableStateOf<PendingMessageRuleConflict?>(null) }
     var pendingRuleConfirmation by remember { mutableStateOf<PendingRuleConfirmation?>(null) }
     var backupSelection by remember { mutableStateOf(BackupSelection()) }
@@ -749,8 +751,19 @@ private fun SmsShieldApp(
             }
         }
     }
+    val deferBlockedAutoDeleteIfRelevant: (Set<Long>) -> Unit = { ids ->
+        val hasDeferredMessages = autoDeleteBlockedDays?.let { days ->
+            inboxStore.blockedAutoDeleteDeferralCandidateIds(ids, days).isNotEmpty()
+        } == true
+        if (hasDeferredMessages) {
+            appSettingsStore.setBlockedAutoDeleteSnoozedUntil(nextLocalDayStartMillis())
+            blockedAutoDeletePromptCandidateIds = emptySet()
+            showBlockedAutoDeletePrompt = false
+        }
+    }
     val archiveSelectedMessage: () -> Unit = {
         selectedMessage?.let { message ->
+            deferBlockedAutoDeleteIfRelevant(setOf(message.id))
             inboxStore.updateArchivedState(message.id, true)
             selectedMessage = null
             selectedConversationKey = null
@@ -761,6 +774,7 @@ private fun SmsShieldApp(
     }
     val returnSelectedMessageToInbox: () -> Unit = {
         selectedMessage?.let { message ->
+            deferBlockedAutoDeleteIfRelevant(setOf(message.id))
             inboxStore.returnMessagesToInbox(
                 ids = setOf(message.id),
                 freezeAutoArchived = true
@@ -775,6 +789,7 @@ private fun SmsShieldApp(
     val archiveSelectedConversation: () -> Unit = {
         val ids = selectedConversation?.ids ?: emptySet()
         if (ids.isNotEmpty()) {
+            deferBlockedAutoDeleteIfRelevant(ids)
             inboxStore.updateArchivedState(ids, true)
             selectedMessage = null
             selectedConversationKey = null
@@ -786,6 +801,7 @@ private fun SmsShieldApp(
     val returnSelectedConversationToInbox: () -> Unit = {
         val ids = selectedConversation?.ids ?: emptySet()
         if (ids.isNotEmpty()) {
+            deferBlockedAutoDeleteIfRelevant(ids)
             inboxStore.returnMessagesToInbox(
                 ids = ids,
                 freezeAutoArchived = true
@@ -798,22 +814,40 @@ private fun SmsShieldApp(
         }
     }
     val archiveMessages: (Set<Long>) -> Unit = { ids ->
+        deferBlockedAutoDeleteIfRelevant(ids)
         inboxStore.updateArchivedState(ids, true)
+        blockedDeletionReviewIds = blockedDeletionReviewIds - ids
         inboxVersion++
     }
     val setMessagesFrozen: (Set<Long>, Boolean) -> Unit = { ids, frozen ->
+        if (!frozen) {
+            deferBlockedAutoDeleteIfRelevant(ids)
+        }
         inboxStore.updateAutoArchiveFrozen(ids, frozen)
         inboxVersion++
     }
+    val unfreezeAndRecheckBlockedMessages: (Set<Long>) -> Unit = { ids ->
+        deferBlockedAutoDeleteIfRelevant(ids)
+        inboxStore.updateAutoArchiveFrozen(ids, false)
+        inboxStore.reblockOverriddenMessages(
+            ids = ids,
+            rules = ruleStore.getRules(),
+            defaultRegion = defaultRegion
+        )
+        inboxVersion++
+    }
     val returnMessagesToInbox: (Set<Long>) -> Unit = { ids ->
+        deferBlockedAutoDeleteIfRelevant(ids)
         inboxStore.returnMessagesToInbox(
             ids = ids,
             freezeAutoArchived = autoArchiveDays != null
         )
+        blockedDeletionReviewIds = blockedDeletionReviewIds - ids
         inboxVersion++
     }
     val deleteMessages: (Set<Long>) -> Unit = { ids ->
         inboxStore.deleteMessages(ids)
+        blockedDeletionReviewIds = blockedDeletionReviewIds - ids
         inboxVersion++
     }
     val blockRulesForMessage: (SmsMessageRecord) -> List<Rule> = { message ->
@@ -894,30 +928,38 @@ private fun SmsShieldApp(
     }
 
     LaunchedEffect(autoDeleteBlockedDays, warnBeforeBlockedAutoDelete) {
-        blockedAutoDeletePromptShown = false
+        blockedAutoDeletePromptCandidateIds = emptySet()
     }
 
-    LaunchedEffect(messagesLoaded, messages, autoArchiveDays, autoDeleteBlockedDays, warnBeforeBlockedAutoDelete, cleanupApplyVersion) {
+    LaunchedEffect(screen) {
+        if (screen != Screen.BLOCKED) {
+            blockedDeletionReviewIds = emptySet()
+        }
+    }
+
+    LaunchedEffect(messagesLoaded, messages, autoArchiveDays, autoDeleteBlockedDays, warnBeforeBlockedAutoDelete, cleanupApplyVersion, screen) {
         if (!messagesLoaded) return@LaunchedEffect
         val archived = withContext(Dispatchers.IO) {
             autoArchiveDays?.let { inboxStore.autoArchiveOlderThan(it) } ?: 0
         }
+        val blockedAutoDeleteSnoozed = appSettingsStore.getBlockedAutoDeleteSnoozedUntil() > System.currentTimeMillis()
         val deleted = withContext(Dispatchers.IO) {
-            if (autoDeleteBlockedDays != null && !warnBeforeBlockedAutoDelete) {
+            if (autoDeleteBlockedDays != null && !warnBeforeBlockedAutoDelete && !blockedAutoDeleteSnoozed) {
                 inboxStore.deleteBlockedOlderThan(autoDeleteBlockedDays)
             } else {
                 0
             }
         }
-        val blockedAutoDeleteSnoozed = appSettingsStore.getBlockedAutoDeleteSnoozedUntil() > System.currentTimeMillis()
-        if (autoDeleteBlockedDays != null && warnBeforeBlockedAutoDelete && !blockedAutoDeletePromptShown && !blockedAutoDeleteSnoozed) {
-            val count = withContext(Dispatchers.IO) {
-                inboxStore.countBlockedOlderThan(autoDeleteBlockedDays)
+        if (autoDeleteBlockedDays != null && warnBeforeBlockedAutoDelete && !blockedAutoDeleteSnoozed && screen != Screen.BLOCKED) {
+            val candidateIds = withContext(Dispatchers.IO) {
+                inboxStore.blockedAutoDeleteCandidateIds(autoDeleteBlockedDays).toSet()
             }
-            if (count > 0) {
-                blockedAutoDeleteCandidateCount = count
+            if (candidateIds.isEmpty()) {
+                blockedAutoDeletePromptCandidateIds = emptySet()
+            } else if (candidateIds != blockedAutoDeletePromptCandidateIds && !showBlockedAutoDeletePrompt) {
+                blockedAutoDeleteCandidateCount = candidateIds.size
+                blockedAutoDeletePromptCandidateIds = candidateIds
                 showBlockedAutoDeletePrompt = true
-                blockedAutoDeletePromptShown = true
             }
         }
         if (archived > 0 || deleted > 0) {
@@ -1192,6 +1234,7 @@ private fun SmsShieldApp(
                                 scrollToTopRequest = inboxScrollToTopRequest,
                                 onArchiveMessages = archiveMessages,
                                 onSetMessagesFrozen = setMessagesFrozen,
+                                onUnfreezeBlockedOverrideMessages = unfreezeAndRecheckBlockedMessages,
                                 onDeleteMessages = deleteMessages,
                                 onSelectionActiveChange = { mainSelectionActive = it },
                                 onConversationClick = openConversationDetail
@@ -1243,6 +1286,9 @@ private fun SmsShieldApp(
                                 use24HourTime = use24HourTime,
                                 searchQuery = searchQuery,
                                 listState = blockedListState,
+                                deletionReviewIds = blockedDeletionReviewIds,
+                                deletionReviewScrollRequest = blockedDeletionReviewScrollRequest,
+                                onArchiveMessages = archiveMessages,
                                 onReturnMessagesToInbox = returnMessagesToInbox,
                                 onDeleteMessages = deleteMessages,
                                 onReviewRules = openBlockAllowList,
@@ -1338,13 +1384,13 @@ private fun SmsShieldApp(
                         },
                         onAutoDeleteBlockedDaysChange = {
                             appSettingsStore.clearBlockedAutoDeleteSnooze()
-                            blockedAutoDeletePromptShown = false
+                            blockedAutoDeletePromptCandidateIds = emptySet()
                             onAutoDeleteBlockedDaysChange(it)
                             cleanupApplyVersion++
                         },
                         onWarnBeforeBlockedAutoDeleteChange = {
                             appSettingsStore.clearBlockedAutoDeleteSnooze()
-                            blockedAutoDeletePromptShown = false
+                            blockedAutoDeletePromptCandidateIds = emptySet()
                             onWarnBeforeBlockedAutoDeleteChange(it)
                         },
                         onChatModeEnabledChange = onChatModeEnabledChange,
@@ -1732,6 +1778,7 @@ private fun SmsShieldApp(
     if (showBlockedAutoDeletePrompt && autoDeleteBlockedDays != null) {
         val snoozeBlockedDeleteReminder = {
             appSettingsStore.setBlockedAutoDeleteSnoozedUntil(System.currentTimeMillis() + 7 * MILLIS_PER_DAY)
+            blockedAutoDeletePromptCandidateIds = emptySet()
             showBlockedAutoDeletePrompt = false
         }
         AlertDialog(
@@ -1747,6 +1794,7 @@ private fun SmsShieldApp(
                 Button(
                     onClick = {
                         inboxStore.deleteBlockedOlderThan(autoDeleteBlockedDays)
+                        blockedAutoDeletePromptCandidateIds = emptySet()
                         showBlockedAutoDeletePrompt = false
                         inboxVersion++
                     },
@@ -1760,8 +1808,16 @@ private fun SmsShieldApp(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(
                         onClick = {
+                            blockedDeletionReviewIds = inboxStore.blockedAutoDeleteCandidateIds(autoDeleteBlockedDays).toSet()
+                            blockedDeletionReviewScrollRequest++
                             showBlockedAutoDeletePrompt = false
                             screen = Screen.BLOCKED
+                            selectedMessage = null
+                            selectedConversationKey = null
+                            searchActive = false
+                            searchQuery = ""
+                            restoreSearchAfterDetail = false
+                            mainSelectionActive = false
                         }
                     ) {
                         Text("Review")
@@ -1968,6 +2024,7 @@ private fun MainListView(
     scrollToTopRequest: Int,
     onArchiveMessages: (Set<Long>) -> Unit,
     onSetMessagesFrozen: (Set<Long>, Boolean) -> Unit,
+    onUnfreezeBlockedOverrideMessages: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
     onSelectionActiveChange: (Boolean) -> Unit,
     onConversationClick: (ConversationThread) -> Unit
@@ -1976,6 +2033,7 @@ private fun MainListView(
     val contactsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
     var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var pendingBulkAction by remember { mutableStateOf<BulkMessageAction?>(null) }
+    var pendingUnfreezeBlockedOverrideIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     LaunchedEffect(selectedIds) {
         onSelectionActiveChange(selectedIds.isNotEmpty())
     }
@@ -2113,7 +2171,11 @@ private fun MainListView(
                         onSelectAll = { selectedIds = if (allVisibleSelected) emptySet() else visibleIds },
                         onArchive = { pendingBulkAction = BulkMessageAction.ARCHIVE },
                         onFreezeToggle = {
-                            onSetMessagesFrozen(selectedIds, !freezeActive)
+                            if (freezeActive && selectedMessages.any { it.blockOverride }) {
+                                pendingUnfreezeBlockedOverrideIds = selectedIds
+                            } else {
+                                onSetMessagesFrozen(selectedIds, !freezeActive)
+                            }
                         },
                         onDelete = { pendingBulkAction = BulkMessageAction.DELETE },
                         modifier = Modifier.align(Alignment.BottomCenter)
@@ -2121,6 +2183,54 @@ private fun MainListView(
                 }
             }
         }
+    }
+
+    if (pendingUnfreezeBlockedOverrideIds.isNotEmpty()) {
+        val pendingCount = pendingUnfreezeBlockedOverrideIds.size
+        AlertDialog(
+            onDismissRequest = { pendingUnfreezeBlockedOverrideIds = emptySet() },
+            shape = RoundedCornerShape(24.dp),
+            title = { Text("Unfreeze blocked message${if (pendingCount == 1) "" else "s"}?") },
+            text = {
+                Text(
+                    if (pendingCount == 1) {
+                        "This message previously hit a blocking condition. Unfreezing it will move it to the blocked folder."
+                    } else {
+                        "One or more selected messages previously hit a blocking condition. Unfreezing them will move matching messages to the blocked folder."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val ids = pendingUnfreezeBlockedOverrideIds
+                        onUnfreezeBlockedOverrideMessages(ids)
+                        selectedIds = emptySet()
+                        pendingUnfreezeBlockedOverrideIds = emptySet()
+                    },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("Proceed")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            val ids = pendingUnfreezeBlockedOverrideIds
+                            onArchiveMessages(ids)
+                            selectedIds = emptySet()
+                            pendingUnfreezeBlockedOverrideIds = emptySet()
+                        }
+                    ) {
+                        Text("Archive")
+                    }
+                    TextButton(onClick = { pendingUnfreezeBlockedOverrideIds = emptySet() }) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
     }
 
     pendingBulkAction?.let { action ->
@@ -2195,6 +2305,9 @@ private fun BlockedMessagesView(
     use24HourTime: Boolean,
     searchQuery: String,
     listState: LazyListState,
+    deletionReviewIds: Set<Long>,
+    deletionReviewScrollRequest: Int,
+    onArchiveMessages: (Set<Long>) -> Unit,
     onReturnMessagesToInbox: (Set<Long>) -> Unit,
     onDeleteMessages: (Set<Long>) -> Unit,
     onReviewRules: () -> Unit,
@@ -2216,6 +2329,9 @@ private fun BlockedMessagesView(
         use24HourTime = use24HourTime,
         searchQuery = searchQuery,
         listState = listState,
+        highlightIds = deletionReviewIds,
+        scrollToHighlightedRequest = deletionReviewScrollRequest,
+        onArchiveMessages = onArchiveMessages,
         showArchiveAgeDividers = false,
         statusForMessage = { "Blocked" },
         blockedForRow = { true },
@@ -2396,7 +2512,7 @@ private fun FolderConversationListView(
                 start = 14.dp,
                 top = 10.dp,
                 end = 14.dp,
-                bottom = if (selectedIds.isEmpty()) 10.dp else 104.dp
+                bottom = if (selectedIds.isNotEmpty()) 104.dp else 10.dp
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -2528,6 +2644,9 @@ private fun FolderMessageListView(
     use24HourTime: Boolean,
     searchQuery: String = "",
     listState: LazyListState,
+    highlightIds: Set<Long> = emptySet(),
+    scrollToHighlightedRequest: Int = 0,
+    onArchiveMessages: ((Set<Long>) -> Unit)? = null,
     showArchiveAgeDividers: Boolean,
     statusForMessage: (SmsMessageRecord) -> String,
     blockedForRow: (SmsMessageRecord) -> Boolean,
@@ -2561,6 +2680,12 @@ private fun FolderMessageListView(
         }
     }
     val visibleIds = remember(visibleMessages) { visibleMessages.map { it.id }.toSet() }
+    val visibleHighlightedIds = remember(visibleMessages, highlightIds) {
+        visibleMessages.map { it.id }.filter { it in highlightIds }.toSet()
+    }
+    val lastHighlightedIndex = remember(visibleMessages, visibleHighlightedIds) {
+        visibleMessages.indexOfLast { it.id in visibleHighlightedIds }
+    }
     val allVisibleSelected = visibleIds.isNotEmpty() && selectedIds.containsAll(visibleIds)
     val toggleSelection: (Long) -> Unit = { id ->
         selectedIds = if (id in selectedIds) {
@@ -2572,6 +2697,14 @@ private fun FolderMessageListView(
     LaunchedEffect(messages) {
         val availableIds = messages.map { it.id }.toSet()
         selectedIds = selectedIds.filter { it in availableIds }.toSet()
+    }
+    LaunchedEffect(scrollToHighlightedRequest, visibleMessages, highlightIds) {
+        if (scrollToHighlightedRequest > 0 && highlightIds.isNotEmpty()) {
+            val targetIndex = visibleMessages.indexOfFirst { it.id in highlightIds }
+            if (targetIndex >= 0) {
+                listState.animateScrollToItem(targetIndex)
+            }
+        }
     }
     if (loading) {
         EmptyState(loadingTitle, loadingBody, colors)
@@ -2594,12 +2727,12 @@ private fun FolderMessageListView(
                 start = 14.dp,
                 top = 10.dp,
                 end = 14.dp,
-                bottom = if (selectedIds.isEmpty()) 10.dp else 104.dp
+                bottom = if (selectedIds.isNotEmpty()) 104.dp else 10.dp
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             var lastArchiveBucket = 0
-            visibleMessages.forEach { msg ->
+            visibleMessages.forEachIndexed { index, msg ->
                 val archiveBucket = if (showArchiveAgeDividers) archiveAgeBucket(msg.timestamp) else 0
                 if (archiveBucket != 0 && archiveBucket != lastArchiveBucket) {
                     item(key = "archive-divider-$archiveBucket-${msg.id}") {
@@ -2622,6 +2755,7 @@ private fun FolderMessageListView(
                     sameDayShowsTime = true,
                     use24HourTime = use24HourTime,
                     selected = msg.id in selectedIds,
+                    highlighted = msg.id in highlightIds,
                     colors = colors,
                     onAvatarClick = { toggleSelection(msg.id) },
                     onClick = {
@@ -2632,6 +2766,15 @@ private fun FolderMessageListView(
                         }
                     }
                 )
+                }
+                if (index == lastHighlightedIndex && visibleHighlightedIds.isNotEmpty()) {
+                    item(key = "blocked-deletion-review-actions") {
+                        DeletionReviewActionPanel(
+                            count = visibleHighlightedIds.size,
+                            onDelete = { onDeleteMessages(visibleHighlightedIds) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }
@@ -2644,6 +2787,11 @@ private fun FolderMessageListView(
                 accentColor = accentColor,
                 allSelected = allVisibleSelected,
                 onSelectAll = { selectedIds = if (allVisibleSelected) emptySet() else visibleIds },
+                onArchive = onArchiveMessages?.let {
+                    {
+                        pendingBulkAction = BulkMessageAction.ARCHIVE
+                    }
+                },
                 onReturnToInbox = { pendingBulkAction = BulkMessageAction.RETURN_TO_INBOX },
                 onDelete = { pendingBulkAction = BulkMessageAction.DELETE },
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -2659,16 +2807,20 @@ private fun FolderMessageListView(
             shape = RoundedCornerShape(24.dp),
             title = {
                 Text(
-                    when {
-                        showReturnWarning -> returnWarningTitle.orEmpty()
-                        action == BulkMessageAction.RETURN_TO_INBOX -> "Return messages to inbox?"
-                        else -> "Delete messages?"
+                        when {
+                            action == BulkMessageAction.ARCHIVE -> "Archive messages?"
+                            showReturnWarning -> returnWarningTitle.orEmpty()
+                            action == BulkMessageAction.RETURN_TO_INBOX -> "Return messages to inbox?"
+                            else -> "Delete messages?"
                     }
                 )
             },
             text = {
                 Text(
                     when {
+                        action == BulkMessageAction.ARCHIVE -> {
+                            "Move $selectedCount selected message${if (selectedCount == 1) "" else "s"} to Archive?"
+                        }
                         showReturnWarning -> returnWarningText.orEmpty()
                         action == BulkMessageAction.RETURN_TO_INBOX -> {
                             "Move $selectedCount selected message${if (selectedCount == 1) "" else "s"} back to inbox?"
@@ -2683,10 +2835,10 @@ private fun FolderMessageListView(
                 Button(
                     onClick = {
                         val ids = selectedIds
-                        if (action == BulkMessageAction.RETURN_TO_INBOX) {
-                            onReturnMessagesToInbox(ids)
-                        } else {
-                            onDeleteMessages(ids)
+                        when (action) {
+                            BulkMessageAction.ARCHIVE -> onArchiveMessages?.invoke(ids)
+                            BulkMessageAction.RETURN_TO_INBOX -> onReturnMessagesToInbox(ids)
+                            else -> onDeleteMessages(ids)
                         }
                         selectedIds = emptySet()
                         pendingBulkAction = null
@@ -2698,7 +2850,13 @@ private fun FolderMessageListView(
                         ButtonDefaults.buttonColors(containerColor = accentColor)
                     }
                 ) {
-                    Text(if (action == BulkMessageAction.RETURN_TO_INBOX) returnConfirmText else "Delete")
+                    Text(
+                        when (action) {
+                            BulkMessageAction.ARCHIVE -> "Archive"
+                            BulkMessageAction.RETURN_TO_INBOX -> returnConfirmText
+                            else -> "Delete"
+                        }
+                    )
                 }
             },
             dismissButton = {
@@ -2724,11 +2882,47 @@ private fun FolderMessageListView(
 }
 
 @Composable
+private fun DeletionReviewActionPanel(
+    count: Int,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "To keep messages due for deletion, move them to Archive or Inbox.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Button(
+                onClick = onDelete,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Delete due message${if (count == 1) "" else "s"}")
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReturnSelectionActionOverlay(
     selectedCount: Int,
     accentColor: Color,
     allSelected: Boolean,
     onSelectAll: () -> Unit,
+    onArchive: (() -> Unit)? = null,
     onReturnToInbox: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
@@ -2759,6 +2953,20 @@ private fun ReturnSelectionActionOverlay(
                         contentDescription = "Select all",
                         tint = if (allSelected) MaterialTheme.colorScheme.onPrimary else accentColor
                     )
+                }
+                if (onArchive != null) {
+                    IconButton(
+                        onClick = onArchive,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(accentColor.copy(alpha = 0.16f))
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_archive_24),
+                            contentDescription = "Archive selected",
+                            tint = accentColor
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onReturnToInbox,
@@ -2873,6 +3081,7 @@ private fun MessageRow(
     sameDayShowsTime: Boolean = false,
     use24HourTime: Boolean = false,
     selected: Boolean = false,
+    highlighted: Boolean = false,
     colors: UiColors,
     onAvatarClick: (() -> Unit)? = null,
     onClick: () -> Unit
@@ -2892,9 +3101,20 @@ private fun MessageRow(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (highlighted) {
+                    Modifier.border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.48f),
+                        shape = RoundedCornerShape(18.dp)
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .clickable { onClick() },
         shape = RoundedCornerShape(18.dp),
-        color = colors.panel,
+        color = if (highlighted) MaterialTheme.colorScheme.error.copy(alpha = 0.12f) else colors.panel,
         tonalElevation = 0.dp
     ) {
         Row(
@@ -3202,6 +3422,16 @@ private fun isTimestampRecent(timestamp: Long): Boolean {
 }
 
 private fun startOfTodayMillis(): Long = startOfDayMillis(System.currentTimeMillis())
+
+private fun nextLocalDayStartMillis(): Long {
+    return Calendar.getInstance().apply {
+        add(Calendar.DAY_OF_YEAR, 1)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
 
 private fun startOfDayMillis(timestamp: Long): Long {
     return Calendar.getInstance().apply {
