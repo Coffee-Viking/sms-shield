@@ -1,5 +1,7 @@
 # SMS Shield
 
+[![IzzyOnDroid](https://img.shields.io/endpoint?url=https://apt.izzysoft.de/fdroid/api/v1/shield/ski.wischnew.shield&label=IzzyOnDroid)](https://apt.izzysoft.de/packages/ski.wischnew.shield)
+
 SMS Shield is an Android SMS app focused on local, on-device message filtering.
 
 It can be used as the default SMS app and supports:
@@ -23,7 +25,7 @@ Play Services, no AI services. Pure rule-based on-device handling.
 ## Build
 
 ```bash
-./gradlew assembleRelease
+./gradlew clean assembleRelease
 ```
 
 For local signed release builds, provide a private `keystore.properties` file.
@@ -31,9 +33,13 @@ Do not commit release keys or generated APKs.
 
 ## Installation
 
-As long as the app is not listed in any major app store, you may run into warning
-messages while installing. When installing from the release APK, you may need to
-pause Google Play Protect temporarily.
+SMS Shield is available through IzzyOnDroid:
+
+[<img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroidButtonGreyBorder_nofont.png" height="80" alt="Get it at IzzyOnDroid">](https://apt.izzysoft.de/packages/ski.wischnew.shield)
+
+Manual GitHub APK installation is still available from the release page. When
+installing manually, you may run into warning messages and may need to pause
+Google Play Protect temporarily.
 
 Step-by-step:
 
@@ -63,8 +69,8 @@ To manually set SMS Shield as the default SMS app:
 - Go to Settings -> Default apps -> SMS app.
 - Select SMS Shield.
 
-Both aspects will be resolved once this app gets listed in app stores, this issue only
-exists temporarily while sideloading from GitHub or other archives.
+The restricted-settings issue only applies to sideloaded APKs and should not be
+needed when installing through IzzyOnDroid.
 
 ## Antivirus False Positives
 
