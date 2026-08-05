@@ -60,7 +60,9 @@ class FilterEngine {
     }
 
     private fun normalizeText(input: String): String =
-        Normalizer.normalize(input, Normalizer.Form.NFKC).lowercase(Locale.ROOT)
+        Normalizer.normalize(input, Normalizer.Form.NFKC)
+            .withoutInvisibleFormatting()
+            .lowercase(Locale.ROOT)
 
     private fun senderAddress(sender: String?): String =
         sender.orEmpty().removePrefix("To:").trim()
@@ -107,5 +109,19 @@ class FilterEngine {
         } catch (_: NumberParseException) {
             null
         }
+    }
+
+    private fun String.withoutInvisibleFormatting(): String {
+        return buildString(length) {
+            this@withoutInvisibleFormatting.forEach { char ->
+                when (Character.getType(char)) {
+                    Character.FORMAT.toInt() -> Unit
+                    Character.CONTROL.toInt(),
+                    Character.LINE_SEPARATOR.toInt(),
+                    Character.PARAGRAPH_SEPARATOR.toInt() -> append(' ')
+                    else -> append(char)
+                }
+            }
+        }.trim()
     }
 }

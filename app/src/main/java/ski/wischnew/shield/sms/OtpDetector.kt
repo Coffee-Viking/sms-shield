@@ -4,7 +4,7 @@ import kotlin.math.abs
 
 object OtpDetector {
     private val keywordPattern = Regex(
-        pattern = """(?:\b(?:otp|code|mtan|one[\s-]?time(?:\s+password)?|verification\s+code|security\s+code|login\s+code|sign[\s-]?in\s+code)\b|验证码)""",
+        pattern = """(?:\b(?:otp|code|kod|pin|tan|mtan|password|passcode|verification|authentication|confirmation|activation|passwort|einmal[\s-]?passwort|einmal[\s-]?code|sicherheits[\s-]?code|best[aä]tigungs[\s-]?code|verifizierungs[\s-]?code|authentifizierungs[\s-]?code|anmelde[\s-]?code|freischalt[\s-]?code)\b|код|验证码|短信验证码|动态密码|一次性密码|校验码|认证码|安全码|登录码|登入码)""",
         option = RegexOption.IGNORE_CASE
     )
     private val codePattern = Regex("""(?<!\d)(?:\d[\s-]?){4,8}(?!\d)""")

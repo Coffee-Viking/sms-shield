@@ -8,9 +8,11 @@ import android.net.Uri
 import android.provider.Telephony
 import ski.wischnew.shield.rules.FilterEngine
 import ski.wischnew.shield.rules.Rule
+import ski.wischnew.shield.rules.RuleStore
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import org.json.JSONArray
@@ -63,7 +65,23 @@ class InboxStore(private val context: Context) {
 
     fun addReceivedMessage(message: SmsMessageRecord): SmsMessageRecord? {
         val existing = listMessages()
-        if (existing.any { it.isLikelyDuplicateOf(message) }) return null
+        val duplicate = existing.firstOrNull { it.isLikelyDuplicateOf(message) }
+        if (duplicate != null) {
+            val merged = duplicate.copy(
+                blocked = duplicate.blocked || message.blocked,
+                archived = if (message.blocked) false else duplicate.archived,
+                blockOverride = if (message.blocked) false else duplicate.blockOverride,
+                simSubscriptionId = duplicate.simSubscriptionId ?: message.simSubscriptionId,
+                simSlotIndex = duplicate.simSlotIndex ?: message.simSlotIndex,
+                simDisplayName = duplicate.simDisplayName ?: message.simDisplayName,
+                simCarrierName = duplicate.simCarrierName ?: message.simCarrierName
+            )
+            if (merged != duplicate) {
+                saveMessages(existing.map { if (it.id == duplicate.id) merged else it })
+                return merged
+            }
+            return null
+        }
         val storedMessage = writeToSystemSmsProvider(message, outgoing = false, adoptProviderId = true)
         val updated = existing.toMutableList().apply { add(0, storedMessage) }.take(500)
         saveMessages(updated)
@@ -95,17 +113,28 @@ class InboxStore(private val context: Context) {
     }
 
     fun updateBlockedState(id: Long, blocked: Boolean): Boolean {
-        var changed = false
+        return listMessages().firstOrNull { it.id == id }?.let { message ->
+            updateBlockedState(message, blocked) != null
+        } == true
+    }
+
+    fun updateBlockedState(target: SmsMessageRecord, blocked: Boolean): SmsMessageRecord? {
+        var changedMessage: SmsMessageRecord? = null
         val updated = listMessages().map { message ->
-            if (message.id == id && !message.outgoing && (message.blocked != blocked || message.archived)) {
-                changed = true
-                message.copy(blocked = blocked, archived = false)
+            if (!message.outgoing && message.matchesStoredTarget(target) && (message.blocked != blocked || message.archived || message.blockOverride)) {
+                val next = message.copy(
+                    blocked = blocked,
+                    archived = false,
+                    blockOverride = if (blocked) false else message.blockOverride
+                )
+                changedMessage = next
+                next
             } else {
                 message
             }
         }
-        if (changed) saveMessages(updated)
-        return changed
+        if (changedMessage != null) saveMessages(updated)
+        return changedMessage
     }
 
     fun updateArchivedState(id: Long, archived: Boolean): Boolean {
@@ -421,7 +450,11 @@ class InboxStore(private val context: Context) {
         val existing = listMessages().associateBy { it.id }.toMutableMap()
         val existingProviderIds = existing.values.mapNotNull { it.systemMessageId }.toMutableSet()
         val deletedProviderIds = deletedSystemMessageIds()
+        val deletedFingerprints = deletedMessageFingerprints()
         val activeSims = SimRepository.activeSims(context)
+        val rules = RuleStore(context).getRules()
+        val filterEngine = FilterEngine()
+        val defaultRegion = Locale.getDefault().country.ifBlank { "US" }
         val projection = arrayOf(
             Telephony.Sms._ID,
             Telephony.Sms.ADDRESS,
@@ -474,6 +507,13 @@ class InboxStore(private val context: Context) {
                     val sender = if (outgoing) "To: $address" else address
                     val body = cursor.getString(bodyIndex).orEmpty()
                     val timestamp = cursor.getLong(dateIndex)
+                    if (deletedFingerprint(sender, outgoing, body, timestamp) in deletedFingerprints) continue
+                    val shouldBlock = !outgoing && filterEngine.shouldBlock(
+                        sender = sender,
+                        body = body,
+                        rules = rules,
+                        defaultRegion = defaultRegion
+                    )
                     val subscriptionId = if (subscriptionIndex >= 0 && !cursor.isNull(subscriptionIndex)) {
                         cursor.getInt(subscriptionIndex)
                     } else {
@@ -486,7 +526,7 @@ class InboxStore(private val context: Context) {
                         sender = sender,
                         body = body,
                         timestamp = timestamp,
-                        blocked = false,
+                        blocked = shouldBlock,
                         outgoing = outgoing,
                         archived = false,
                         deliveryStatus = deliveryStatus,
@@ -497,10 +537,28 @@ class InboxStore(private val context: Context) {
                     )
                     val duplicate = existing.values.firstOrNull { it.isLikelyDuplicateOf(importedMessage) }
                     if (duplicate != null) {
-                        if (duplicate.systemMessageId == null || duplicate.deliveryStatus == null) {
+                        val mergedDuplicate = duplicate.copy(
+                            systemMessageId = duplicate.systemMessageId ?: id,
+                            deliveryStatus = duplicate.deliveryStatus ?: deliveryStatus,
+                            blocked = duplicate.blocked || shouldBlock,
+                            archived = if (shouldBlock) false else duplicate.archived,
+                            blockOverride = if (shouldBlock) false else duplicate.blockOverride,
+                            simSubscriptionId = duplicate.simSubscriptionId ?: simFields.subscriptionId,
+                            simSlotIndex = duplicate.simSlotIndex ?: simFields.slotIndex,
+                            simDisplayName = duplicate.simDisplayName ?: simFields.displayName,
+                            simCarrierName = duplicate.simCarrierName ?: simFields.carrierName
+                        )
+                        if (mergedDuplicate != duplicate) {
                             existing[duplicate.id] = duplicate.copy(
-                                systemMessageId = duplicate.systemMessageId ?: id,
-                                deliveryStatus = duplicate.deliveryStatus ?: deliveryStatus
+                                systemMessageId = mergedDuplicate.systemMessageId,
+                                deliveryStatus = mergedDuplicate.deliveryStatus,
+                                blocked = mergedDuplicate.blocked,
+                                archived = mergedDuplicate.archived,
+                                blockOverride = mergedDuplicate.blockOverride,
+                                simSubscriptionId = mergedDuplicate.simSubscriptionId,
+                                simSlotIndex = mergedDuplicate.simSlotIndex,
+                                simDisplayName = mergedDuplicate.simDisplayName,
+                                simCarrierName = mergedDuplicate.simCarrierName
                             )
                             existingProviderIds += id
                             merged++
@@ -597,6 +655,12 @@ class InboxStore(private val context: Context) {
             abs(timestamp - other.timestamp) <= DUPLICATE_WINDOW_MILLIS
     }
 
+    private fun SmsMessageRecord.matchesStoredTarget(target: SmsMessageRecord): Boolean {
+        if (id == target.id) return true
+        if (systemMessageId != null && systemMessageId == target.systemMessageId) return true
+        return isLikelyDuplicateOf(target)
+    }
+
     private fun JSONObject.optNullableInt(name: String): Int? {
         return if (has(name) && !isNull(name)) optInt(name) else null
     }
@@ -609,11 +673,21 @@ class InboxStore(private val context: Context) {
         val ids = messages.mapNotNull { message ->
             message.systemMessageId ?: findSystemSmsProviderId(message)
         }.map { it.toString() }
-        if (ids.isEmpty()) return
+        val fingerprints = messages.map { message ->
+            deletedFingerprint(
+                sender = message.sender,
+                outgoing = message.outgoing,
+                body = message.body,
+                timestamp = message.timestamp
+            )
+        }
+        if (ids.isEmpty() && fingerprints.isEmpty()) return
 
         val existing = prefs.getStringSet(DELETED_SYSTEM_MESSAGE_IDS_KEY, emptySet()).orEmpty()
+        val existingFingerprints = prefs.getStringSet(DELETED_MESSAGE_FINGERPRINTS_KEY, emptySet()).orEmpty()
         prefs.edit()
             .putStringSet(DELETED_SYSTEM_MESSAGE_IDS_KEY, existing + ids)
+            .putStringSet(DELETED_MESSAGE_FINGERPRINTS_KEY, existingFingerprints + fingerprints)
             .apply()
     }
 
@@ -622,6 +696,16 @@ class InboxStore(private val context: Context) {
             .orEmpty()
             .mapNotNull { it.toLongOrNull() }
             .toSet()
+    }
+
+    private fun deletedMessageFingerprints(): Set<String> {
+        return prefs.getStringSet(DELETED_MESSAGE_FINGERPRINTS_KEY, emptySet()).orEmpty()
+    }
+
+    private fun deletedFingerprint(sender: String, outgoing: Boolean, body: String, timestamp: Long): String {
+        val direction = if (outgoing) "out" else "in"
+        val timestampWindow = timestamp / DUPLICATE_WINDOW_MILLIS
+        return listOf(direction, sender, body, timestampWindow).joinToString("\u001f")
     }
 
     private fun findSystemSmsProviderId(message: SmsMessageRecord): Long? {
@@ -710,6 +794,7 @@ class InboxStore(private val context: Context) {
         private const val MILLIS_PER_DAY = 24L * 60L * 60L * 1000L
         private const val DUPLICATE_WINDOW_MILLIS = 10_000L
         private const val DELETED_SYSTEM_MESSAGE_IDS_KEY = "deleted_system_message_ids"
+        private const val DELETED_MESSAGE_FINGERPRINTS_KEY = "deleted_message_fingerprints"
 
         fun notifyMessagesUpdated(context: Context) {
             context.sendBroadcast(Intent(ACTION_MESSAGES_UPDATED).setPackage(context.packageName))

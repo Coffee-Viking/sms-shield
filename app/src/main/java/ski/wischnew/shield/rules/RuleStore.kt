@@ -30,7 +30,7 @@ class RuleStore(context: Context) {
     }
 
     fun addRule(rule: Rule) {
-        val updated = getRules().toMutableList().apply { add(rule) }
+        val updated = getRules().toMutableList().apply { add(rule.sanitized()) }
         saveRules(updated)
     }
 
@@ -41,8 +41,9 @@ class RuleStore(context: Context) {
     }
 
     fun updateRule(rule: Rule) {
+        val sanitizedRule = rule.sanitized()
         val updated = getRules().map { existing ->
-            if (existing.id == rule.id) rule else existing
+            if (existing.id == rule.id) sanitizedRule else existing
         }
         saveRules(updated)
     }
@@ -93,7 +94,32 @@ class RuleStore(context: Context) {
     }
 
     private fun normalizeText(value: String): String {
-        return Normalizer.normalize(value.trim(), Normalizer.Form.NFKC).lowercase(Locale.ROOT)
+        return sanitizeText(value).lowercase(Locale.ROOT)
+    }
+
+    private fun Rule.sanitized(): Rule {
+        return copy(
+            pattern = when (type) {
+                RuleType.KEYWORD,
+                RuleType.SENDER -> sanitizeText(pattern)
+                RuleType.NUMBER -> pattern.trim()
+                RuleType.COUNTRY -> pattern.trim()
+            }
+        )
+    }
+
+    private fun sanitizeText(value: String): String {
+        return buildString(value.length) {
+            Normalizer.normalize(value, Normalizer.Form.NFKC).forEach { char ->
+                when (Character.getType(char)) {
+                    Character.FORMAT.toInt() -> Unit
+                    Character.CONTROL.toInt(),
+                    Character.LINE_SEPARATOR.toInt(),
+                    Character.PARAGRAPH_SEPARATOR.toInt() -> append(' ')
+                    else -> append(char)
+                }
+            }
+        }.trim()
     }
 
     private fun normalizeNumberPattern(value: String): String {

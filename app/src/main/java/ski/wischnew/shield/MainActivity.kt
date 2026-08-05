@@ -709,19 +709,21 @@ private fun SmsShieldApp(
         selectedMessage?.let { message ->
             val blocked = rule.action == RuleAction.BLOCK
             val canBlockMessage = !message.outgoing || !blocked
-            inboxStore.updateBlockedState(message.id, blocked)
-            selectedMessage = if (canBlockMessage) {
-                message.copy(blocked = blocked, archived = false)
+            val updatedMessage = if (canBlockMessage) {
+                inboxStore.updateBlockedState(message, blocked)
             } else {
-                message
+                null
             }
+            selectedMessage = updatedMessage ?: message
             selectedConversationKey = null
             restoreSearchAfterDetail = false
-            if (!blocked) {
+            if (blocked && updatedMessage != null) {
+                screen = Screen.BLOCKED
+            } else if (!blocked) {
                 screen = Screen.MAIN
             }
             inboxVersion++
-            if (blocked) {
+            if (blocked && updatedMessage != null) {
                 pendingRetroactiveBlockRule = rule
             }
         }
@@ -851,17 +853,22 @@ private fun SmsShieldApp(
         inboxVersion++
     }
     val blockRulesForMessage: (SmsMessageRecord) -> List<Rule> = { message ->
-        if (!message.blocked && !message.blockOverride) {
-            emptyList()
-        } else {
-            FilterEngine().matchingRules(
-                sender = message.sender,
-                body = message.body,
-                rules = ruleStore.getRules(),
-                defaultRegion = Locale.getDefault().country.ifBlank { "US" },
-                action = RuleAction.BLOCK
-            )
-        }
+        FilterEngine().matchingRules(
+            sender = message.sender,
+            body = message.body,
+            rules = ruleStore.getRules(),
+            defaultRegion = Locale.getDefault().country.ifBlank { "US" },
+            action = RuleAction.BLOCK
+        )
+    }
+    val allowRulesForMessage: (SmsMessageRecord) -> List<Rule> = { message ->
+        FilterEngine().matchingRules(
+            sender = message.sender,
+            body = message.body,
+            rules = ruleStore.getRules(),
+            defaultRegion = Locale.getDefault().country.ifBlank { "US" },
+            action = RuleAction.ALLOW
+        )
     }
     val openBlockAllowList: () -> Unit = {
         selectedMessage = null
@@ -1158,6 +1165,7 @@ private fun SmsShieldApp(
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                allowRuleHits = allowRulesForMessage(selectedMessage!!),
                                 onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
@@ -1192,6 +1200,7 @@ private fun SmsShieldApp(
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                allowRuleHits = allowRulesForMessage(selectedMessage!!),
                                 onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
@@ -1250,6 +1259,7 @@ private fun SmsShieldApp(
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                allowRuleHits = allowRulesForMessage(selectedMessage!!),
                                 onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
@@ -1305,6 +1315,7 @@ private fun SmsShieldApp(
                                 activeSims = activeSims,
                                 use24HourTime = use24HourTime,
                                 blockedRuleHits = blockRulesForMessage(selectedMessage!!),
+                                allowRuleHits = allowRulesForMessage(selectedMessage!!),
                                 onSelectThreadMessage = { selectedMessage = it },
                                 onReply = {
                                     composeSourceMessage = selectedMessage
@@ -2072,8 +2083,10 @@ private fun MainListView(
             }
         }
     }
-    LaunchedEffect(scrollToTopRequest, filteredConversations) {
-        if (scrollToTopRequest > 0) {
+    var handledScrollToTopRequest by remember { mutableIntStateOf(0) }
+    LaunchedEffect(scrollToTopRequest) {
+        if (scrollToTopRequest > handledScrollToTopRequest) {
+            handledScrollToTopRequest = scrollToTopRequest
             listState.scrollToItem(0)
         }
     }
@@ -3588,6 +3601,7 @@ private fun MessageDetailView(
     activeSims: List<SimInfo>,
     use24HourTime: Boolean,
     blockedRuleHits: List<Rule> = emptyList(),
+    allowRuleHits: List<Rule> = emptyList(),
     onSelectThreadMessage: (SmsMessageRecord) -> Unit = {},
     onReply: () -> Unit,
     onForward: () -> Unit,
@@ -3611,6 +3625,9 @@ private fun MessageDetailView(
     var addedNotice by remember(message.id) { mutableStateOf<String?>(null) }
     val clipboardManager = LocalClipboardManager.current
     val otpCode = remember(message.body) { OtpDetector.findOtp(message.body) }
+    val allowOverrideHits = remember(message.blocked, blockedRuleHits, allowRuleHits) {
+        if (!message.blocked && blockedRuleHits.isNotEmpty()) allowRuleHits else emptyList()
+    }
     val selection = bodyValue.selection
     val selectedText = remember(bodyValue) {
         val start = minOf(selection.start, selection.end).coerceIn(0, bodyValue.text.length)
@@ -3717,10 +3734,18 @@ private fun MessageDetailView(
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (message.blocked || message.blockOverride) {
+                    if (blockedRuleHits.isNotEmpty() || message.blocked || message.blockOverride) {
                         Text(
                             blockedRuleHitText(blockedRuleHits),
                             color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (allowOverrideHits.isNotEmpty()) {
+                        Text(
+                            allowRuleOverrideText(allowOverrideHits),
+                            color = Color(0xFF00C853),
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -4838,6 +4863,14 @@ private fun blockedRuleHitText(rules: List<Rule>): String {
         "Matched block rule: ${ruleHitLabel(rules.first())}"
     } else {
         "Matched block rules:\n" + rules.joinToString("\n") { "- ${ruleHitLabel(it)}" }
+    }
+}
+
+private fun allowRuleOverrideText(rules: List<Rule>): String {
+    return if (rules.size == 1) {
+        "Allow rule override: ${ruleHitLabel(rules.first())}"
+    } else {
+        "Allow rule overrides:\n" + rules.joinToString("\n") { "- ${ruleHitLabel(it)}" }
     }
 }
 

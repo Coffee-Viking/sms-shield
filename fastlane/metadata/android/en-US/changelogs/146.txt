@@ -1,0 +1,9 @@
+Improved OTP detection and rule handling.
+
+Added additional OTP keywords, extending coverage from English, German, and Chinese to Bulgarian/Russian transliterations and Cyrillic variants.
+
+Improved rule matching for hidden formatting/control characters.
+
+Preserved deleted-message handling during Android SMS provider imports.
+
+Added message-detail highlighting for allow-rule overrides when both block and allow rules match.
